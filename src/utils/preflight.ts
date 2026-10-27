@@ -1,7 +1,7 @@
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { config, LOGS_DIR, OPENOBSERVE_ENVS, OpenObserveEnv, openObserveAccountFor } from '../config.js';
+import { config, LOGS_DIR, OPENOBSERVE_ENVS, OpenObserveEnv, openObserveAccountFor, openObserveAccountSource, seqSource } from '../config.js';
 import { logsInstructions, registerLogsTools } from '../tools/index.js';
 import { logger } from './logger.js';
 
@@ -77,10 +77,10 @@ function checkMcpTools(): PreflightCheckItem {
 
 function checkSeq(): PreflightCheckItem {
   const { serverUrl, apiKey } = config.seq;
-  if (!serverUrl) return { name: 'Seq Provider', status: 'WARN', message: 'Unconfigured (SEQ_SERVER_URL not set in config/seq.env).' };
+  if (!serverUrl) return { name: 'Seq Provider', status: 'WARN', message: "Unconfigured (SEQ_SERVER_URL not set in config/seq.env or the hub's seq section)." };
   return apiKey
-    ? { name: 'Seq Provider', status: 'PASS', message: `Configured with server ${serverUrl}` }
-    : { name: 'Seq Provider', status: 'WARN', message: `Server URL set (${serverUrl}) but SEQ_API_KEY is empty.` };
+    ? { name: 'Seq Provider', status: 'PASS', message: `Configured with server ${serverUrl} (from ${seqSource})` }
+    : { name: 'Seq Provider', status: 'WARN', message: `Server URL set (${serverUrl}, from ${seqSource}) but SEQ_API_KEY is empty.` };
 }
 
 function checkOpenObserve(): PreflightCheckItem {
@@ -99,8 +99,8 @@ function checkOpenObserveEnv(env: OpenObserveEnv): PreflightCheckItem {
   const { url, email, token } = openObserveAccountFor(env);
   const name = `OpenObserve ${env.toUpperCase()}`;
   return url && email && token
-    ? { name, status: 'PASS', message: `env '${env}' available: ${url} (connection not verified)` }
-    : { name, status: 'WARN', message: `env '${env}' unavailable: fill in config/openobserve.${env}.env` };
+    ? { name, status: 'PASS', message: `env '${env}' available from ${openObserveAccountSource(env)}: ${url} (connection not verified)` }
+    : { name, status: 'WARN', message: `env '${env}' unavailable: fill in config/openobserve.${env}.env or the hub's openobserve.${env}` };
 }
 
 function printReport(result: PreflightResult): void {

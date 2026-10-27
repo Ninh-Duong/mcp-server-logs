@@ -96,8 +96,9 @@ const hubFile = (hub: object) => {
   writeFileSync(file, JSON.stringify({ transport: 'stdio', env: {}, ...hub }));
   return file;
 };
-const printAccounts = `const { config, openObserveAccountFor } = await import('./dist/config.js');
-  process.stdout.write(JSON.stringify({ openobserve: config.openobserve, seq: config.seq, stg: openObserveAccountFor('stg'), prod: openObserveAccountFor('prod') }));`;
+const printAccounts = `const { config, openObserveAccountFor, openObserveAccountSource: source, seqSource } = await import('./dist/config.js');
+  process.stdout.write(JSON.stringify({ openobserve: config.openobserve, seq: config.seq, stg: openObserveAccountFor('stg'), prod: openObserveAccountFor('prod'),
+    sources: { dev: source('dev'), stg: source('stg'), prod: source('prod'), seq: seqSource } }));`;
 
 test('CENTRAL_CONFIG_PATH: hub accounts win over config/*.env, which stay the fallback per environment', async () => {
   const dir = configDir({ 'openobserve.stg.env': account('https://local-stg.example.test'), 'openobserve.prod.env': account('https://local-prod.example.test'), 'seq.env': 'SEQ_SERVER_URL=http://local-seq\nSEQ_API_KEY=local\n' });
@@ -111,14 +112,23 @@ test('CENTRAL_CONFIG_PATH: hub accounts win over config/*.env, which stay the fa
   assert.deepEqual(parsed.stg, hubStg);
   assert.equal(parsed.prod.url, 'https://local-prod.example.test', 'an empty hub account falls back to the file');
   assert.deepEqual(parsed.seq, { serverUrl: 'https://hub-seq.example.test', apiKey: 'hk' });
+  assert.deepEqual(parsed.sources, { dev: 'unset', stg: 'hub', prod: 'local', seq: 'hub' }, 'each account reports where it comes from');
 });
 
 test('CENTRAL_CONFIG_PATH: variables set by the client still win over the hub', async () => {
   const central = hubFile({ openobserve: { default_env: 'stg', stg: { url: 'https://hub-stg.example.test' } }, seq: { server_url: 'https://hub-seq.example.test', api_key: 'hk' } });
-  const { stdout } = await runModule(printAccount, { CONFIG_DIR: configDir({}), CENTRAL_CONFIG_PATH: central, OPENOBSERVE_URL: 'https://env.example.test', SEQ_SERVER_URL: 'https://env-seq.example.test' });
+  const { stdout } = await runModule(printAccounts, { CONFIG_DIR: configDir({}), CENTRAL_CONFIG_PATH: central, OPENOBSERVE_URL: 'https://env.example.test', SEQ_SERVER_URL: 'https://env-seq.example.test' });
   const parsed = JSON.parse(stdout);
   assert.equal(parsed.openobserve.url, 'https://env.example.test');
   assert.deepEqual(parsed.seq, { serverUrl: 'https://env-seq.example.test', apiKey: 'hk' });
+  assert.equal(parsed.sources.seq, 'env');
+});
+
+test('without the hub, accounts come from config/*.env', async () => {
+  const dir = configDir({ 'openobserve.dev.env': account('https://dev.example.test'), 'seq.env': 'SEQ_SERVER_URL=http://local-seq\nSEQ_API_KEY=local\n' });
+  const parsed = JSON.parse((await runModule(printAccounts, { CONFIG_DIR: dir })).stdout);
+  assert.deepEqual(parsed.sources, { dev: 'local', stg: 'unset', prod: 'unset', seq: 'local' });
+  assert.equal(JSON.parse((await runModule(printAccounts, { CONFIG_DIR: configDir({}) })).stdout).sources.seq, 'unset');
 });
 
 test('CENTRAL_CONFIG_PATH: a missing or broken hub file is reported and the local files are used', async () => {

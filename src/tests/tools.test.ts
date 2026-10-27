@@ -178,8 +178,10 @@ test('export_openobserve_logs with rcid saves that one request', async () => {
 test('one server serves every environment: OpenObserve tools take env', async () => {
   writeFileSync(join(CONFIG_DIR, 'openobserve.prod.env'), 'OPENOBSERVE_URL=https://prod.example.test\nOPENOBSERVE_EMAIL=reader@example.test\nOPENOBSERVE_TOKEN=p\n');
   const client = await connect();
-  const environments = (await data(client, 'list_log_providers')).openobserve_environments;
-  assert.deepEqual(environments.map((e: { env: string; configured: boolean }) => [e.env, e.configured]), [['dev', false], ['stg', false], ['prod', true]]);
+  const listed = await data(client, 'list_log_providers');
+  const environments = listed.openobserve_environments;
+  assert.deepEqual(environments.map((e: { env: string; configured: boolean; source: string }) => [e.env, e.configured, e.source]), [['dev', false, 'unset'], ['stg', false, 'unset'], ['prod', true, 'local']]);
+  assert.equal(listed.providers.find((p: { name: string }) => p.name === 'seq').source, 'unset');
 
   fakeStream();
   const answer = globalThis.fetch;

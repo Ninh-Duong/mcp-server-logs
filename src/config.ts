@@ -92,11 +92,16 @@ function readHubConfig(): HubConfig {
 }
 const hub = readHubConfig();
 
+/** Where an account comes from: variables set by the client, the hub's file, the config/*.env files, or nowhere. */
+export type ConfigSource = 'env' | 'hub' | 'local' | 'unset';
+
 ensureEnvFiles();
 // The hub's Seq account, then the one the CLI saves in config/seq.env; SEQ_* variables set by the MCP client win.
+const seqFromEnv = Boolean(process.env.SEQ_SERVER_URL || process.env.SEQ_API_KEY);
 if (hub.seq?.server_url && process.env.SEQ_SERVER_URL === undefined) process.env.SEQ_SERVER_URL = hub.seq.server_url;
 if (hub.seq?.api_key && process.env.SEQ_API_KEY === undefined) process.env.SEQ_API_KEY = hub.seq.api_key;
 loadEnvFile(resolve(CONFIG_DIR, 'seq.env'));
+export const seqSource: ConfigSource = seqFromEnv ? 'env' : real(hub.seq?.server_url) ? 'hub' : real(process.env.SEQ_SERVER_URL) ? 'local' : 'unset';
 
 /** Accepts a raw token or a pasted Basic credential (base64 "email:password", optionally prefixed "Basic "). */
 export function splitBasicCredential(email: string, token: string): { email: string; token: string } {
@@ -134,6 +139,12 @@ export function openObserveAccountFor(env: string): { env: OpenObserveEnv; url: 
   if (real(fromHub?.url)) return { env: key, ...parseAccount(fromHub?.url, fromHub?.email, fromHub?.token) };
   const saved = readEnvFile(openObserveEnvFile(key));
   return { env: key, ...parseAccount(saved.OPENOBSERVE_URL, saved.OPENOBSERVE_EMAIL, saved.OPENOBSERVE_TOKEN) };
+}
+
+/** Where the account for `env` comes from: the hub's `openobserve.<env>`, config/openobserve.<env>.env, or nowhere. */
+export function openObserveAccountSource(env: string): ConfigSource {
+  const { env: key, url } = openObserveAccountFor(env);
+  return real(hub.openobserve?.[key]?.url) ? 'hub' : url ? 'local' : 'unset';
 }
 
 /** Switches the active OpenObserve account to the one saved for `env`. */

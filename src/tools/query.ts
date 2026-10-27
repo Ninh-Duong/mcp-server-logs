@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { LogsService } from '../service.js';
-import { OPENOBSERVE_ENVS, openObserveAccountFor } from '../config.js';
+import { ConfigSource, OPENOBSERVE_ENVS, openObserveAccountFor, openObserveAccountSource, seqSource } from '../config.js';
 import { READ_REMOTE, env, json, level, runIn } from './common.js';
 
 export function registerBugPrompt(server: McpServer, prefix: string): void {
@@ -46,10 +46,10 @@ Never claim a root cause from a matching timestamp alone. Do not expose credenti
 export function registerQueryTools(server: McpServer, prefix: string, service: LogsService): void {
   server.registerTool(`${prefix}list_log_providers`, {
     title: 'List log providers',
-    description: 'List supported log providers (Seq, OpenObserve) and their configuration status, plus which OpenObserve environments (dev, stg, prod) have an account to pass as env. This does not verify a network connection.',
+    description: 'List supported log providers (Seq, OpenObserve) and their configuration status, plus which OpenObserve environments (dev, stg, prod) have an account to pass as env. Each account reports its source: env (client variables), hub (mcp-hub config), local (config/*.env) or unset. This does not verify a network connection.',
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, async () => {
-    const providers = service.listProviders();
+    const providers = service.listProviders().map((p) => (p.name === 'seq' ? { ...p, source: seqSource } : p));
     return json({ count: providers.length, providers, openobserve_environments: openObserveEnvironments() });
   });
 
@@ -74,10 +74,10 @@ export function registerQueryTools(server: McpServer, prefix: string, service: L
   }, 'Log query error: '));
 }
 
-/** Which config/openobserve.<env>.env files hold a complete account (values only checked for presence). */
-function openObserveEnvironments(): Array<{ env: string; configured: boolean; url?: string }> {
+/** Which environments hold a complete account (values only checked for presence), and where each comes from. */
+function openObserveEnvironments(): Array<{ env: string; configured: boolean; url?: string; source: ConfigSource }> {
   return OPENOBSERVE_ENVS.map((name) => {
     const { url, email, token } = openObserveAccountFor(name);
-    return { env: name, configured: Boolean(url && email && token), url: url || undefined };
+    return { env: name, configured: Boolean(url && email && token), url: url || undefined, source: openObserveAccountSource(name) };
   });
 }

@@ -156,7 +156,7 @@ export class OpenObserveProvider implements LogProvider {
     const account = env && env !== 'default' ? openObserveAccountFor(env) : openObserveAccount();
     const label = (env || 'default').toUpperCase();
     if (!account.url || !account.email || !account.token) {
-      throw new Error(`No access: the OpenObserve ${label} account is not configured${env && env !== 'default' ? ` (config/openobserve.${env.toLowerCase()}.env)` : ''}`);
+      throw new Error(`No access: the OpenObserve ${label} account is not configured${env && env !== 'default' ? ` (config/openobserve.${env.toLowerCase()}.env or the hub's openobserve.${env.toLowerCase()})` : ''}`);
     }
     let organizations: OpenObserveOrganization[];
     try {

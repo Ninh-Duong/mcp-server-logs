@@ -335,7 +335,7 @@ get_openobserve_service_logs    { "env": "prod", "organization": "…", "stream"
 ```
 
 - `env` picks `config/openobserve.<env>.env` for that call only. Without `env`, the default is used: `OPENOBSERVE_ENV` from the entry, else `OPENOBSERVE_URL` / `OPENOBSERVE_EMAIL` / `OPENOBSERVE_TOKEN` from the entry, else `config/openobserve.dev.env` if it has a URL, else no default (pass `env`).
-- Under mcp-hub, the hub can send the accounts instead: `CENTRAL_CONFIG_PATH` in the entry's `env` names a JSON file whose `openobserve` / `seq` sections win over the `config/*.env` files (see `../mcp-hub/docs/mcps/mcp-server-logs.md`).
+- Under mcp-hub, the hub can send the accounts instead: `CENTRAL_CONFIG_PATH` in the entry's `env` names a JSON file whose `openobserve` / `seq` sections win over the `config/*.env` files; an empty hub value falls back to the file (see `../mcp-hub/docs/mcps/mcp-server-logs.md`). `list_log_providers` and `--preflight` show where each account comes from: `env`, `hub`, `local` or `unset`.
 - `read_ai_context` needs no `env`: it uses the environment written in the export.
 - An environment works once its file is filled in (step 5); no change to the client config is needed.
 - Seq: `SEQ_SERVER_URL` / `SEQ_API_KEY` in the entry's `env` win over `config/seq.env`. Prefer the file, so the key is not in the client config:
@@ -355,7 +355,7 @@ get_openobserve_service_logs    { "env": "prod", "organization": "…", "stream"
 | Server not listed in the client | Wrong file or key (§4), invalid JSON after the edit, backslashes not escaped, client not reloaded. Restore the `.bak` if needed. |
 | `spawn node ENOENT` / server fails to start in a GUI app | The app does not see your shell PATH. Use the absolute node path from step 3 as `command`. |
 | Timeout on first start | The first run installs and builds. Run step 4 first, or raise the client's startup timeout (Codex `startup_timeout_sec`, OpenCode `timeout`). |
-| `configured: false` / `WARN … unavailable` / `Missing OPENOBSERVE_URL … (PROD)` | That environment's `config/openobserve.<env>.env` is missing or still has placeholders. |
+| `configured: false` / `WARN … unavailable` / `Missing OPENOBSERVE_URL … (PROD)` | That environment's `config/openobserve.<env>.env` (or, under mcp-hub, its `openobserve.<env>` section) is missing or still has placeholders. |
 | 401 / 403 from `list_openobserve_organizations` | Wrong email/token, or the service account is not enabled for the organization. See [OPENOBSERVE_GUIDE.md](OPENOBSERVE_GUIDE.md). |
 | `OpenObserve URL must use HTTPS` | Use the `https://` URL (plain HTTP is accepted only for localhost). |
 | Anything else | Server log: `<MCP_LOGS_PATH>/logs/YYYY/MM/mcp-process-YYYY-MM-DD.log`. Client log: see your §4 subsection. |

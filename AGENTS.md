@@ -92,7 +92,7 @@ Then add tests with a fake server (see `src/tests/seq.test.ts`).
 ## 4. MCP Tools Reference
 
 ### Tool: `list_log_providers`
-- **Purpose**: Lists all known log backends, whether their credentials are configured, and endpoint URLs, plus `openobserve_environments` (which of dev/stg/prod have an account).
+- **Purpose**: Lists all known log backends, whether their credentials are configured, and endpoint URLs, plus `openobserve_environments` (which of dev/stg/prod have an account). The Seq provider and each environment carry `source`: `env` (client variables), `hub` (mcp-hub's file), `local` (`config/*.env`) or `unset`; `--preflight` shows the same.
 - **Parameters**: None.
 
 ### Tool: `query_logs`
