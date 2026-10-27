@@ -80,6 +80,10 @@ const transport = new StdioClientTransport({
     OPENOBSERVE_ENV: 'dev', // default env for calls without `env`: ./sub-mcps/mcp-server-logs/config/openobserve.dev.env
     SEQ_SERVER_URL: 'https://seq.example.com',
     SEQ_API_KEY: process.env.SEQ_API_KEY ?? '',
+    // Or send every account from the parent: a JSON file (path relative to the child folder) with
+    // { "openobserve": { "default_env": "dev", "dev": { "url", "email", "token" }, "stg": {…}, "prod": {…} },
+    //   "seq": { "server_url", "api_key" } }. It ranks below the variables above and above the child's config/*.env.
+    CENTRAL_CONFIG_PATH: '../parent/config/private/mcp-server-logs.json',
   },
 });
 

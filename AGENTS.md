@@ -18,7 +18,7 @@
 | Path | Responsibility |
 |---|---|
 | `src/index.ts` | entry point (MCP stdio, `--cli`, `--preflight`) and the library exports |
-| `src/config.ts` | folders, account files (`config/openobserve.<env>.env`, `config/seq.env`), placeholder detection |
+| `src/config.ts` | folders, account files (`config/openobserve.<env>.env`, `config/seq.env`), accounts sent by mcp-hub (`CENTRAL_CONFIG_PATH`), placeholder detection |
 | `src/service.ts` | `LogsService`: one provider or a broadcast to every configured provider |
 | `src/providers/` | `base.ts` levels/time bounds · `seq.ts` · `openobserve.ts` (HTTP, paging, flows) · `openobserve-sql.ts` (pure SQL, noise filter, stream shape) · `index.ts` registry |
 | `src/tools/` | MCP tools: `common.ts` (`run`, results, shared zod fields, annotations) · `query.ts` · `openobserve.ts` · `ai-context.ts` |
@@ -108,7 +108,7 @@ Then add tests with a fake server (see `src/tests/seq.test.ts`).
   - `level` *(optional string or string[])*: `'Verbose' | 'Debug' | 'Information' | 'Warning' | 'Error' | 'Fatal'`. One level = minimum severity (`'Warning'` → Warning, Error, Fatal); an array = exactly those levels.
   - `env` *(optional `'dev' | 'stg' | 'prod'`)*: OpenObserve account for this call (`config/openobserve.<env>.env`); omit for the server default.
 
-**One server, every environment**: every OpenObserve tool (and `query_logs`, `export_openobserve_logs`) takes the same optional `env`. `withOpenObserveEnv` / `openObserveAccount()` (`src/config.ts`) scope the account to one call; never read `config.openobserve` directly in a provider or tool. `read_ai_context` takes no `env`: it uses the export's own.
+**One server, every environment**: every OpenObserve tool (and `query_logs`, `export_openobserve_logs`) takes the same optional `env`. `withOpenObserveEnv` / `openObserveAccount()` (`src/config.ts`) scope the account to one call; never read `config.openobserve` directly in a provider or tool. Under mcp-hub, `CENTRAL_CONFIG_PATH` names the hub's JSON file whose `openobserve` (`default_env`, `dev`/`stg`/`prod` = `{url, email, token}`) and `seq` (`server_url`, `api_key`) sections rank between variables already set and the `config/*.env` files (an empty account falls back to its file). `read_ai_context` takes no `env`: it uses the export's own.
 
 OpenObserve also exposes `list_openobserve_organizations`, `list_openobserve_streams`, `list_openobserve_stream_schema`, `list_openobserve_services`, `get_openobserve_service_logs`, `export_openobserve_logs` (writes ONE `ai-context/` export folder per call, `<from>_<to>_<service>_<levels>_<rows>` in `AI_CONTEXT_TIME_ZONE` (default UTC), with encrypted files `SUMMARY.lhub`, `services/<service>/<level>.lhub`, `rcid/<field>-<id>.lhub`; framework noise only counted unless `include_noise`; `skip_duplicates`, default true, drops rows already saved by an overlapping export), `list_ai_context_snapshots` (export folders), `read_ai_context` (decrypts one file of a folder in memory: `SUMMARY.lhub` first, then `file`/`offset` or `grep`), `find_openobserve_logs_by_rcid`, and `search_openobserve_logs`. See `docs/OPENOBSERVE_GUIDE.md`.
 

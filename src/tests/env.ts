@@ -14,5 +14,5 @@ process.env.AI_CONTEXT_DIR = join(root, 'ai-context');
 process.env.AI_CONTEXT_TIME_ZONE = 'UTC'; // a developer's root .env may set another zone
 mkdirSync(process.env.CONFIG_DIR, { recursive: true });
 for (const key of Object.keys(process.env)) {
-  if (/^(OPENOBSERVE|SEQ)_|^(APP_ENV|NODE_ENV)$/.test(key)) delete process.env[key];
+  if (/^(OPENOBSERVE|SEQ)_|^(APP_ENV|NODE_ENV|CENTRAL_CONFIG_PATH)$/.test(key)) delete process.env[key];
 }

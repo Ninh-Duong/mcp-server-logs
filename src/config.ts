@@ -73,8 +73,29 @@ function loadEnvFile(envPath: string): void {
   }
 }
 
+type HubAccount = { url?: string; email?: string; token?: string };
+type HubConfig = { openobserve?: { default_env?: string } & Partial<Record<OpenObserveEnv, HubAccount>>; seq?: { server_url?: string; api_key?: string } };
+
+/**
+ * Accounts sent by a parent MCP (mcp-hub): CENTRAL_CONFIG_PATH names its JSON file with `openobserve` and `seq`
+ * sections. They rank below variables already set and above the config/*.env files, which stay the fallback.
+ */
+function readHubConfig(): HubConfig {
+  const path = process.env.CENTRAL_CONFIG_PATH;
+  if (!path) return {};
+  try {
+    return JSON.parse(readFileSync(resolve(PROJECT_ROOT, path), 'utf8')) as HubConfig;
+  } catch (error) {
+    process.stderr.write(`CENTRAL_CONFIG_PATH ignored, using config/*.env: ${(error as Error).message}\n`);
+    return {};
+  }
+}
+const hub = readHubConfig();
+
 ensureEnvFiles();
-// The CLI saves the Seq account here; SEQ_* variables set by the MCP client win.
+// The hub's Seq account, then the one the CLI saves in config/seq.env; SEQ_* variables set by the MCP client win.
+if (hub.seq?.server_url && process.env.SEQ_SERVER_URL === undefined) process.env.SEQ_SERVER_URL = hub.seq.server_url;
+if (hub.seq?.api_key && process.env.SEQ_API_KEY === undefined) process.env.SEQ_API_KEY = hub.seq.api_key;
 loadEnvFile(resolve(CONFIG_DIR, 'seq.env'));
 
 /** Accepts a raw token or a pasted Basic credential (base64 "email:password", optionally prefixed "Basic "). */
@@ -105,10 +126,12 @@ export const config = {
   },
 };
 
-/** The account saved for `env` in config/openobserve.<env>.env, without making it active. */
+/** The account for `env` sent by the hub, else saved in config/openobserve.<env>.env, without making it active. */
 export function openObserveAccountFor(env: string): { env: OpenObserveEnv; url: string; email: string; token: string } {
   const key = env.toLowerCase() as OpenObserveEnv;
   if (!OPENOBSERVE_ENVS.includes(key)) throw new Error(`Unknown OpenObserve environment '${env}'. Use ${OPENOBSERVE_ENVS.join(', ')}`);
+  const fromHub = hub.openobserve?.[key];
+  if (real(fromHub?.url)) return { env: key, ...parseAccount(fromHub?.url, fromHub?.email, fromHub?.token) };
   const saved = readEnvFile(openObserveEnvFile(key));
   return { env: key, ...parseAccount(saved.OPENOBSERVE_URL, saved.OPENOBSERVE_EMAIL, saved.OPENOBSERVE_TOKEN) };
 }
@@ -126,9 +149,9 @@ export const openObserveAccount = (): typeof config.openobserve => callAccount.g
 /** Runs `fn` with the account saved for `env` (one MCP call); without `env`, with the startup account. */
 export const withOpenObserveEnv = <T>(env: string | undefined, fn: () => T): T => (env ? callAccount.run(openObserveAccountFor(env), fn) : fn());
 
-// MCP mode picks its environment at startup, e.g. "env": { "OPENOBSERVE_ENV": "dev" } in the MCP client config.
-// Without it (and without OPENOBSERVE_URL), the DEV account is used when its file has a URL.
-const requestedEnv = (process.env.OPENOBSERVE_ENV || '').toLowerCase() as OpenObserveEnv;
+// MCP mode picks its environment at startup, e.g. "env": { "OPENOBSERVE_ENV": "dev" } in the MCP client config,
+// else (without OPENOBSERVE_URL) the hub's `openobserve.default_env`. Without either, DEV is used when it has a URL.
+const requestedEnv = (process.env.OPENOBSERVE_ENV || (!config.openobserve.url && hub.openobserve?.default_env) || '').toLowerCase() as OpenObserveEnv;
 if (OPENOBSERVE_ENVS.includes(requestedEnv)) useOpenObserveEnv(requestedEnv);
 else if (!config.openobserve.url && openObserveAccountFor('dev').url) useOpenObserveEnv('dev');
 
