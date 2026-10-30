@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { OpenObserveProvider, levelFromText } from '../providers/openobserve.js';
 import { getProvider } from '../providers/index.js';
+import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
-import { ORG as org, SCHEMA, fakeSearch, routed, setup } from './helpers.js';
+import { ORG as org, SCHEMA, fakeSearch, routed, setup, us } from './helpers.js';
 
 const oldFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = oldFetch; });
@@ -336,4 +337,98 @@ test('searchServiceLogs caches results in ai-context and returns from cache on s
   assert.equal(logs2.length, 1);
   assert.equal(logs2[0]?.message, 'err msg');
   assert.equal(calls.length, callCountBefore, 'no additional remote call made on cache hit');
+});
+
+/** A provider with a settable clock, over `routed` (which counts every request by URL). */
+function clocked(start: string, answer: (sql: string) => unknown[] = () => [], schema = ['_timestamp', 'body']) {
+  const fake = routed(schema, answer);
+  const urls: string[] = [];
+  const answerRouted = globalThis.fetch;
+  globalThis.fetch = (url, init) => { urls.push(String(url)); return answerRouted(url, init); };
+  const clock = { now: Date.parse(start) };
+  const provider = new OpenObserveProvider(() => clock.now);
+  const count = (part: string) => urls.filter((u) => u.includes(part)).length;
+  return { ...fake, provider, clock, count };
+}
+
+test('SQL search is cache first: a repeat (whitespace aside) is answered from ai-context in the same order', async () => {
+  const rows = [3, 1, 2].map((m) => ({ _timestamp: us(`2026-10-07T09:0${m}:00Z`), body: `row ${m}` }));
+  const { provider, sqls } = clocked('2026-10-07T12:00:00Z', () => rows);
+  const search = { organization: 'org-id', sql: 'SELECT * FROM "s" WHERE "body" LIKE \'row%\'', from: '2026-10-07T09:00:00Z', to: '2026-10-07T10:00:00Z', limit: 10 };
+  const first = await provider.searchCached(search);
+  assert.deepEqual([first.cached, first.logs.map((l) => l.message)], [false, ['row 3', 'row 1', 'row 2']]);
+  const again = await provider.searchCached({ ...search, sql: '  SELECT *\n  FROM "s"   WHERE "body" LIKE \'row%\' ' });
+  assert.equal(again.cached, true);
+  assert.deepEqual(again.logs, JSON.parse(JSON.stringify(first.logs)), 'same rows, same order, same JSON');
+  assert.equal(sqls.length, 1, 'OpenObserve searched once');
+  assert.deepEqual((await provider.searchCached({ ...search, limit: 2 })).logs.map((l) => l.message), ['row 3', 'row 1'], 'a smaller limit is cut from the cache');
+  assert.equal((await provider.searchCached({ ...search, limit: 50 })).cached, true, 'a larger limit hits when the cache held every row');
+  assert.equal(sqls.length, 1);
+
+  const before = sqls.length;
+  const searchQueries = await provider.queryLogs({ organization: 'org-id', query: search.sql, from: search.from, to: search.to, limit: 10 });
+  assert.deepEqual(searchQueries.map((l) => l.message), ['row 3', 'row 1', 'row 2']);
+  assert.equal(sqls.length, before, 'query_logs with the same SQL hits the same cache');
+});
+
+test('SQL cache misses on other SQL, quoted whitespace, window, env and a larger limit than a full cache held', async () => {
+  const rows = [{ _timestamp: us('2026-10-07T09:05:00Z'), body: 'x' }, { _timestamp: us('2026-10-07T09:06:00Z'), body: 'y' }];
+  const { provider, sqls } = clocked('2026-10-07T12:00:00Z', () => rows);
+  const search = { organization: 'org-id', sql: 'SELECT * FROM "s" WHERE "body" = \'a  b\'', from: '2026-10-07T09:00:00Z', to: '2026-10-07T10:00:00Z', limit: 2 };
+  await provider.searchCached(search);
+  const misses = [
+    { ...search, sql: 'SELECT * FROM "s" WHERE "body" = \'a b\'' },
+    { ...search, to: '2026-10-07T10:30:00Z' },
+    { ...search, limit: 3 },
+  ];
+  for (const miss of misses) assert.equal((await provider.searchCached(miss)).cached, false, JSON.stringify(miss));
+  config.openobserve = { ...config.openobserve, env: 'stg' };
+  assert.equal((await provider.searchCached(search)).cached, false, 'another env');
+  assert.equal(sqls.length, 5);
+});
+
+test('empty SQL results are not cached', async () => {
+  const { provider, sqls } = clocked('2026-10-07T12:00:00Z');
+  const search = { organization: 'org-id', sql: 'SELECT * FROM "s" WHERE 0=1', from: '2026-10-07T09:00:00Z', to: '2026-10-07T10:00:00Z' };
+  await provider.searchCached(search);
+  assert.equal((await provider.searchCached(search)).cached, false);
+  assert.equal(sqls.length, 2);
+});
+
+test('relative windows count from the minute start: two searches in one minute share one upstream request', async () => {
+  const rows = [{ _timestamp: us('2026-10-07T11:50:00Z'), body: 'recent' }];
+  const { provider, clock, queries } = clocked('2026-10-07T12:00:10.500Z', () => rows);
+  const search = { organization: 'org-id', sql: 'SELECT * FROM "s" WHERE "body" = \'recent\'', from: '15m' };
+  const first = await provider.searchCached(search);
+  assert.deepEqual([first.from, first.to], ['2026-10-07T11:45:00.000Z', '2026-10-07T12:00:00.000Z']);
+  assert.deepEqual([queries[0]!.start_time, queries[0]!.end_time], [us('2026-10-07T11:45:00Z'), us('2026-10-07T12:00:00Z')], 'the rounded window is what OpenObserve searches');
+  clock.now = Date.parse('2026-10-07T12:00:59.900Z');
+  assert.equal((await provider.searchCached(search)).cached, true);
+  assert.equal(queries.length, 1);
+  clock.now = Date.parse('2026-10-07T12:01:00.000Z');
+  assert.equal((await provider.searchCached(search)).cached, false, 'the next minute searches again');
+  assert.equal(queries.length, 2);
+});
+
+test('stream lists and schemas are fetched once per 5 minutes, then again', async () => {
+  const { provider, clock, count } = clocked('2026-10-07T12:00:00Z', () => [], [...SCHEMA, 'statuscode', 'path']);
+  for (let i = 0; i < 3; i++) await provider.getStreamSchema('org-id', 's');
+  await provider.listStreams('org-id');
+  await provider.exportAggregates({ organization: 'org-id', stream: 's', from: '1h' });
+  await provider.listServices({ organization: 'org-id', stream: 's' });
+  assert.deepEqual([count('/streams?type=logs'), count('/schema')], [1, 1]);
+  clock.now += 5 * 60_000 - 1;
+  await provider.getStreamSchema('org-id', 's');
+  assert.deepEqual([count('/streams?type=logs'), count('/schema')], [1, 1], 'still inside 5 minutes');
+  clock.now += 1;
+  await provider.getStreamSchema('org-id', 's');
+  assert.deepEqual([count('/streams?type=logs'), count('/schema')], [2, 2], 'refetched after 5 minutes');
+  await assert.rejects(provider.getStreamSchema('org-id', 'other'), /Log stream 'other' is not accessible/);
+  assert.equal(count('/streams?type=logs'), 2, 'an unknown stream is checked against the cached list');
+});
+
+test('a failed stream list is not cached', async () => {
+  const { provider } = setup([org, 'not a list', { list: [{ name: 's' }] }]);
+  await assert.rejects(provider.listStreams('org-id'), /Unexpected OpenObserve streams response/);
+  assert.deepEqual(await provider.listStreams('org-id'), ['s']);
 });

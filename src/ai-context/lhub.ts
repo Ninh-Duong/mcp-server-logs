@@ -13,7 +13,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlib } from 'nod
 /** Plaintext header of a .lhub file: what its path already shows, never the key. */
 export interface LhubHeader {
   v: 3;
-  kind: 'summary' | 'patterns' | 'manifest' | 'logs' | 'flow';
+  kind: 'summary' | 'patterns' | 'manifest' | 'logs' | 'flow' | 'query';
   provider: string;
   env?: string;
   organization: string;
@@ -26,6 +26,9 @@ export interface LhubHeader {
   to: string;
   /** summary only: rows downloaded by the export */
   rows?: number;
+  /** summary of a cached SQL search only: its queryKey and limit (query.lhub holds the rows in result order) */
+  query?: string;
+  limit?: number;
   createdAt: string;
   salt: string;
 }

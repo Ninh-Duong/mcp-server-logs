@@ -6,6 +6,7 @@
  *     patterns.lhub, manifest.lhub    every pattern; query parameters, aggregates and flow list
  *     services/<service>/<level>.lhub one compact log per line, oldest first
  *     rcid/<field>-<id>.lhub          one failing request end to end (optional)
+ *     query.lhub                      a cached SQL search: its LogEntry rows in result order (optional; SUMMARY header has its queryKey)
  * Folder and file names are plaintext; every file's content is encrypted (see lhub.ts).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -14,7 +15,7 @@ import { AI_CONTEXT_DIR } from '../config.js';
 import { ExportAggregates, LogEntry, RequestFlow } from '../types.js';
 import { LHUB, LhubFile, LhubHeaderInput, appendFrame, createLhub, writeLhub } from './lhub.js';
 import {
-  ErrorId, ExportResult, FlowRow, Pattern, SnapshotMeta, compact, errorIdOf, exportLabel, messageTemplate, patternOf, pickIds, safe,
+  ErrorId, ExportResult, FlowRow, Pattern, SnapshotMeta, compact, errorIdOf, exportLabel, messageTemplate, patternOf, pickIds, queryKey, safe,
   snapshotParent, toPosix,
 } from './model.js';
 import { mergeAggregates, noiseRows, rankPatterns, renderSummary } from './summary.js';
@@ -45,6 +46,8 @@ interface ExportState {
   duplicates: number;
   truncated: boolean;
   inferredLevels: boolean;
+  /** query.lhub was written (a cached SQL search) */
+  query: boolean;
 }
 
 const INDEX_HEADER = '# ai-context index\n\nNewest first. Each line is one export folder; its files are encrypted .lhub files: read them with the read_ai_context MCP tool (SUMMARY.lhub first; it points to the exact log lines worth reading). Reading needs an OpenObserve account for the export\'s environment that is enabled for its organization.\n\n';
@@ -69,6 +72,8 @@ export function startExport(meta: SnapshotMeta, { orgKey, baseDir = AI_CONTEXT_D
     flowIds: (max = 200) => pickIds(state.errorIds, max),
     /** Writes each flow to rcid/<field>-<value>.lhub (one request end to end, oldest first). */
     addFlows: (flows: RequestFlow[]) => addFlows(state, flows),
+    /** Writes query.lhub: the rows of meta.sql exactly as the search returned them, so a repeat search is answered from it. */
+    addQuery: (entries: LogEntry[]) => addQuery(state, entries),
     /** Writes SUMMARY/patterns/manifest, adds the INDEX.md line and renames the folder to ..._<rows>. */
     finish: () => finish(state),
   };
@@ -85,7 +90,7 @@ function openExport(meta: SnapshotMeta, orgKey: string, baseDir: string): Export
     meta, orgKey, baseDir, parent, dir,
     common: { provider: meta.provider, env: meta.env, organization: meta.organization, stream: meta.stream, from: meta.from, to: meta.to },
     files: new Map(), patterns: new Map(), counts: new Map(), errorIds: [], flowRows: [],
-    rows: 0, duplicates: 0, truncated: false, inferredLevels: false,
+    rows: 0, duplicates: 0, truncated: false, inferredLevels: false, query: false,
   };
 }
 
@@ -165,6 +170,12 @@ function writeFlow(state: ExportState, flow: RequestFlow, patternKey: string | u
   };
 }
 
+function addQuery(state: ExportState, entries: LogEntry[]): void {
+  const text = entries.map((entry) => JSON.stringify(entry) + '\n').join('');
+  writeLhub(join(state.dir, 'query.lhub'), { kind: 'query', ...state.common }, state.orgKey, text, Date.parse(state.meta.from), Date.parse(state.meta.to));
+  state.query = true;
+}
+
 function finish(state: ExportState): ExportResult {
   const { meta, flowRows } = state;
   const createdAt = new Date().toISOString();
@@ -182,7 +193,8 @@ function finish(state: ExportState): ExportResult {
     ...meta, rows: state.rows, duplicates: state.duplicates, truncated: state.truncated, patterns: ranked.length,
     aggregates: state.aggregates, flows: flowRows.map(({ patternKey: _key, ...flow }) => flow), createdAt,
   }, null, 2) + '\n');
-  write('SUMMARY.lhub', 'summary', renderSummary({ ...state, note, createdAt, ranked }), { service: meta.service, rows: total });
+  const query = state.query ? { query: queryKey({ ...meta, sql: meta.sql! }, state.orgKey), limit: meta.limit } : {};
+  write('SUMMARY.lhub', 'summary', renderSummary({ ...state, note, createdAt, ranked }), { service: meta.service, rows: total, ...query });
 
   const finalDir = renameFinished(state, total);
   const snapshot = toPosix(relative(state.baseDir, finalDir));

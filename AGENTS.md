@@ -19,7 +19,7 @@
 |---|---|
 | `src/index.ts` | entry point (MCP stdio, `--cli`, `--preflight`) and the library exports |
 | `src/config.ts` | folders, account files (`config/openobserve.<env>.env`, `config/seq.env`), accounts sent by mcp-hub (`CENTRAL_CONFIG_PATH`), placeholder detection |
-| `src/service.ts` | `LogsService`: one provider or a broadcast to every configured provider |
+| `src/service.ts` | `LogsService`: `query_logs` goes to one provider: the named one, else OpenObserve when its account is configured, else Seq |
 | `src/providers/` | `base.ts` levels/time bounds · `seq.ts` · `openobserve.ts` (HTTP, paging, flows) · `openobserve-sql.ts` (pure SQL, noise filter, stream shape) · `index.ts` registry |
 | `src/tools/` | MCP tools: `common.ts` (`run`, results, shared zod fields, annotations) · `query.ts` · `openobserve.ts` · `ai-context.ts` |
 | `src/ai-context/` | encrypted exports: `lhub.ts` (file format) · `model.ts` (lines, patterns, names, windows) · `export-folder.ts` (writer) · `summary.ts` · `read.ts` |
@@ -39,7 +39,7 @@
 ## 2. Model-Specific Prompting & Execution Guidelines
 
 ### For Anthropic Claude (Sonnet / Opus)
-- **Tool Calling**: When invoking `query_logs`, specify `provider` if the user refers to a specific system (e.g. "check Seq"), or omit it to broadcast across all configured backends.
+- **Tool Calling**: When invoking `query_logs`, specify `provider` if the user refers to a specific system (e.g. "check Seq"); without it the query goes to OpenObserve when its account (for `env`) is configured, else to Seq. It never queries both.
 - **Code Edits**: Keep changes surgical. When adding a provider, only create the provider file in `src/providers/<name>.ts` and register it in `src/providers/index.ts`. Do not re-architect existing modules.
 
 ### For Google Gemini (Flash / Pro)
@@ -98,7 +98,7 @@ Then add tests with a fake server (see `src/tests/seq.test.ts`).
 ### Tool: `query_logs`
 - **Purpose**: Retrieves logs with filtering, time range bounding, and level filtering.
 - **Parameters**:
-  - `provider` *(optional string)*: `'seq'`, `'openobserve'`, or omit for compatible configured backends.
+  - `provider` *(optional string)*: `'seq'`, `'openobserve'`, or omit for the default: OpenObserve when its account for `env` is configured, else Seq. A failing provider is an error; output `provider` names the one queried.
   - `organization` *(optional string)*: OpenObserve Organization identifier; required for OpenObserve queries.
   - `stream` *(optional string)*: OpenObserve log stream when `query` is omitted.
   - `query` *(optional string)*: Seq filter expression, or exactly one read-only OpenObserve `SELECT` statement.
@@ -111,6 +111,8 @@ Then add tests with a fake server (see `src/tests/seq.test.ts`).
 **One server, every environment**: every OpenObserve tool (and `query_logs`, `export_openobserve_logs`) takes the same optional `env`. `withOpenObserveEnv` / `openObserveAccount()` (`src/config.ts`) scope the account to one call; never read `config.openobserve` directly in a provider or tool. Under mcp-hub, `CENTRAL_CONFIG_PATH` names the hub's JSON file whose `openobserve` (`default_env`, `dev`/`stg`/`prod` = `{url, email, token}`) and `seq` (`server_url`, `api_key`) sections rank between variables already set and the `config/*.env` files (an empty account falls back to its file). `read_ai_context` takes no `env`: it uses the export's own.
 
 OpenObserve also exposes `list_openobserve_organizations`, `list_openobserve_streams`, `list_openobserve_stream_schema`, `list_openobserve_services`, `get_openobserve_service_logs`, `export_openobserve_logs` (writes ONE `ai-context/` export folder per call, `<from>_<to>_<service>_<levels>_<rows>` in `AI_CONTEXT_TIME_ZONE` (default UTC), with encrypted files `SUMMARY.lhub`, `services/<service>/<level>.lhub`, `rcid/<field>-<id>.lhub`; framework noise only counted unless `include_noise`; `skip_duplicates`, default true, drops rows already saved by an overlapping export), `list_ai_context_snapshots` (export folders), `read_ai_context` (decrypts one file of a folder in memory: `SUMMARY.lhub` first, then `file`/`offset` or `grep`), `find_openobserve_logs_by_rcid`, and `search_openobserve_logs`. See `docs/OPENOBSERVE_GUIDE.md`.
+
+**Cache rule**: `search_openobserve_logs` and `query_logs` with OpenObserve SQL go through `OpenObserveProvider.searchCached`: a search with the same env, normalized SQL (whitespace outside quotes collapsed) and absolute window is answered from the ai-context copy (`query.lhub`, rows in result order; the SUMMARY header holds `query` = HMAC of those keyed by the organization identifier, and its `limit`), else OpenObserve is searched and non-empty results are saved. `searchLogs` itself never reads the cache (exports, counts, flows need fresh rows). Relative bounds and the default end count from the start of the current minute (`searchWindow`, `src/providers/base.ts`), so repeats within a minute share a key and the newest < 1 minute shows up from the next minute on. Stream lists and schemas are kept in memory for 5 minutes per account and organization (`METADATA_TTL_MS`); the organization access check keeps its 60 s cache. The provider takes a clock (`new OpenObserveProvider(() => now)`) for tests. Seq is never cached.
 
 **Tool rule**: register tools with `server.registerTool(name, { title, description, inputSchema, annotations }, handler)` (not the deprecated `server.tool`), wrap the body in `run(toolName, …)` (or `runIn(toolName, env, …)` for OpenObserve tools) from `src/tools/common.ts`, and set `readOnlyHint` (false only for tools that write, like `export_openobserve_logs`) and `openWorldHint` (true when it calls OpenObserve or Seq).
 

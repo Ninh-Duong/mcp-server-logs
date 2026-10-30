@@ -1,4 +1,4 @@
-import { LogEntry, LogLevel, LogQuery, ProviderStatus } from './types.js';
+import { LogEntry, LogLevel, LogProvider, LogQuery, ProviderStatus } from './types.js';
 import { normalizeLogLevel, resolveLevels } from './providers/base.js';
 import { getAllProviders, getProvider, listProviders } from './providers/index.js';
 import { logger, maskOrg } from './utils/logger.js';
@@ -12,59 +12,32 @@ export class LogsService {
   }
 
   /**
-   * Queries logs from a specific provider, or all configured providers if none specified
+   * The provider a query goes to: `name`, else the default — OpenObserve when its account (the current env) is
+   * configured, else Seq. Throws for an unknown name or when neither is configured.
    */
-  public async queryLogs(params: LogQuery & { provider?: string }): Promise<LogEntry[]> {
-    const limit = Math.min(Math.max(params.limit || 50, 1), 500);
-
-    // Single provider query
-    if (params.provider) {
-      const provider = getProvider(params.provider);
-      if (!provider) {
-        throw new Error(
-          `Unknown provider '${params.provider}'. Available: ${getAllProviders().map((p) => p.name).join(', ')}`
-        );
-      }
-      logger.info('log_query_started', {
-        provider: provider.name, limit, queryProvided: Boolean(params.query),
-        organization: maskOrg(params.organization), stream: params.stream, level: params.level,
-      });
-      const logs = await provider.queryLogs({ ...params, limit });
-      const results = this.filterAndSort(logs, params.level, limit);
-      logger.info('log_query_completed', { provider: provider.name, returned: results.length });
-      return results;
+  public resolveProvider(name?: string): LogProvider {
+    if (name) {
+      const provider = getProvider(name);
+      if (!provider) throw new Error(`Unknown provider '${name}'. Available: ${getAllProviders().map((p) => p.name).join(', ')}`);
+      return provider;
     }
-
-    return this.broadcast(params, limit);
+    const provider = ['openobserve', 'seq'].map((n) => getProvider(n)!).find((p) => p.getStatus().configured);
+    if (!provider) throw new Error('No log provider is configured: set up an OpenObserve account or Seq (list_log_providers shows what is missing)');
+    return provider;
   }
 
-  /** Every configured provider (OpenObserve only with an organization and a stream or SQL); a failing one returns nothing. */
-  private async broadcast(params: LogQuery, limit: number): Promise<LogEntry[]> {
-    const configuredProviders = getAllProviders().filter((p) => p.getStatus().configured && (p.name !== 'openobserve' || (params.organization && (params.query || params.stream))));
-    if (configuredProviders.length === 0) {
-      logger.warn('No log providers are currently configured with valid credentials.');
-      return [];
-    }
-
-    logger.info(
-      `Broadcasting log query across ${configuredProviders.length} configured providers: ${configuredProviders.map((p) => p.name).join(', ')}`
-    );
-
-    const queryPromises = configuredProviders.map(async (provider) => {
-      try {
-        logger.info('log_query_started', { provider: provider.name, limit, queryProvided: Boolean(params.query) });
-        const logs = await provider.queryLogs({ ...params, limit });
-        logger.info('log_query_completed', { provider: provider.name, returned: logs.length });
-        return logs;
-      } catch (err) {
-        logger.error('log_query_failed', { provider: provider.name, errorType: err instanceof Error ? err.name : 'UnknownError' });
-        return [];
-      }
+  /** Queries one provider (resolveProvider), then applies the level filter, newest first, cut to the limit. */
+  public async queryLogs(params: LogQuery & { provider?: string }): Promise<LogEntry[]> {
+    const limit = Math.min(Math.max(params.limit || 50, 1), 500);
+    const provider = this.resolveProvider(params.provider);
+    logger.info('log_query_started', {
+      provider: provider.name, limit, queryProvided: Boolean(params.query),
+      organization: maskOrg(params.organization), stream: params.stream, level: params.level,
     });
-
-    const results = await Promise.all(queryPromises);
-    const combined = results.flat();
-    return this.filterAndSort(combined, params.level, limit);
+    const logs = await provider.queryLogs({ ...params, limit });
+    const results = this.filterAndSort(logs, params.level, limit);
+    logger.info('log_query_completed', { provider: provider.name, returned: results.length });
+    return results;
   }
 
   private filterAndSort(logs: LogEntry[], levelFilter?: LogLevel | LogLevel[], limit: number = 50): LogEntry[] {

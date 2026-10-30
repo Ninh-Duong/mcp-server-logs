@@ -7,7 +7,7 @@ import { LogEntry, LogLevel } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { startExport } from './export-folder.js';
 import { LHUB, LhubHeader, readLhub, readLhubHeader } from './lhub.js';
-import { SnapshotMeta, compact, safe, snapshotParent, toPosix, uncompact } from './model.js';
+import { SnapshotMeta, compact, queryKey, safe, snapshotParent, toPosix, uncompact } from './model.js';
 
 /**
  * Absolute path of an export folder given relative to baseDir. Errors name only the relative folder: tool results never
@@ -196,13 +196,32 @@ export function findCachedLogs(params: { stream: string; service?: string; level
 }
 
 /**
- * Clones fetched logs to an ai-context snapshot so future calls hit local cache.
+ * Rows of the newest cached SQL search with the same env, normalized SQL and absolute window (see queryKey), cut to
+ * `limit`. A cache saved with a smaller limit only answers when it held every row (rows < its limit).
+ */
+export function findCachedQuery(search: { env?: string; sql: string; from: string; to: string }, limit: number, orgKey: string, baseDir = AI_CONTEXT_DIR): LogEntry[] | undefined {
+  const key = queryKey(search, orgKey);
+  for (const { snapshot, header } of listSnapshots(baseDir, true)) {
+    if (!header || header.query !== key || header.limit === undefined) continue;
+    if (limit > header.limit && (header.rows ?? 0) >= header.limit) continue;
+    try {
+      const { text } = readLhub(join(exportDir(snapshot, baseDir), 'query.lhub'), orgKey);
+      return text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as LogEntry).slice(0, limit);
+    } catch { /* missing, unreadable with this orgKey or corrupt */ }
+  }
+  return undefined;
+}
+
+/**
+ * Clones fetched logs to an ai-context snapshot so future calls hit local cache. With `meta.sql` the rows are also kept
+ * in result order in query.lhub, for findCachedQuery.
  */
 export function cloneLogsToAiContext(meta: SnapshotMeta, orgKey: string, logs: LogEntry[], baseDir = AI_CONTEXT_DIR): string | undefined {
   if (!logs.length) return undefined;
   try {
     const out = startExport({ ...meta, cache: true }, { orgKey, baseDir });
     out.addWindow(logs, { from: meta.from, to: meta.to });
+    if (meta.sql) out.addQuery(logs);
     const result = out.finish();
     logger.info('ai_context.cloned_logs', { snapshot: result.snapshot, rows: logs.length });
     return result.snapshot;

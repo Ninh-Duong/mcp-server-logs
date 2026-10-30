@@ -42,9 +42,9 @@ export function normalizeLogLevel(raw: string | undefined): LogLevel {
 }
 
 /**
- * Parses time expressions such as '15m', '1h', '24h', '7d' into an ISO 8601 UTC date string
+ * Parses time expressions such as '15m', '1h', '24h', '7d' (that long before `now`) into an ISO 8601 UTC date string
  */
-export function parseTimeBound(input?: string): string | undefined {
+export function parseTimeBound(input?: string, now = Date.now()): string | undefined {
   if (!input) return undefined;
 
   // If already an ISO string
@@ -58,7 +58,6 @@ export function parseTimeBound(input?: string): string | undefined {
   if (match) {
     const count = parseInt(match[1] || '0', 10);
     const unit = (match[2] || '').toLowerCase();
-    const now = Date.now();
     let ms = 0;
     if (unit === 'm') ms = count * 60 * 1000;
     else if (unit === 'h') ms = count * 3600 * 1000;
@@ -69,4 +68,21 @@ export function parseTimeBound(input?: string): string | undefined {
   }
 
   return undefined;
+}
+
+const MINUTE_MS = 60_000;
+const RELATIVE = /^\s*\d+\s*[mhdw]\s*$/i;
+
+/**
+ * Absolute bounds of an OpenObserve search. Relative values ('15m') and the default end (now) count from the start of
+ * the current minute, so repeated searches within one minute share one window (and one ai-context cache key); the
+ * newest < 1 minute of logs shows up from the next minute on. ISO values are kept as given. When `from` is an ISO time
+ * inside the current minute, the end stays now instead of the minute start.
+ */
+export function searchWindow(from: string | undefined, to: string | undefined, defaultFrom: string, now = Date.now()): { from?: string; to?: string } {
+  const minute = Math.floor(now / MINUTE_MS) * MINUTE_MS;
+  const bound = (value: string) => parseTimeBound(value, RELATIVE.test(value) ? minute : now);
+  const start = bound(from || defaultFrom);
+  if (to) return { from: start, to: bound(to) };
+  return { from: start, to: new Date(start && Date.parse(start) >= minute ? now : minute).toISOString() };
 }

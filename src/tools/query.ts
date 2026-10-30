@@ -36,7 +36,7 @@ Workflow:
 2. Pick the OpenObserve environment (env: 'dev', 'stg' or 'prod') the bug happened in; ask if it is not clear, and pass the same env to every OpenObserve call below. Call ${prefix}list_openobserve_organizations with it and choose the accessible organization. If none matches, ask for the correct environment.
 3. Check local ai-context first: call ${prefix}list_ai_context_snapshots to see if an export already covers the relevant time range or RCID. If found, use ${prefix}read_ai_context (start with SUMMARY.lhub) to analyze bugs and request flows offline without querying prod.
 4. If RCID is known, call ${prefix}find_openobserve_logs_by_rcid (it reads from local ai-context if cached, or queries OpenObserve and automatically clones the request flow to ai-context).
-5. For stream/service exploration: call ${prefix}list_openobserve_streams, then ${prefix}list_openobserve_stream_schema. Use ${prefix}get_openobserve_service_logs or ${prefix}search_openobserve_logs; any fetched remote logs are automatically cloned to local ai-context.
+5. For stream/service exploration: call ${prefix}list_openobserve_streams, then ${prefix}list_openobserve_stream_schema (both cached 5 minutes). Use ${prefix}get_openobserve_service_logs or ${prefix}search_openobserve_logs; fetched remote logs are cloned to local ai-context, and repeating the same search (same SQL, window and env) is answered from there.
 6. Create a short case-id from the endpoint and date unless one was supplied. Save the executed SQL, bounds, organization, stream, and returned log rows as evidence under log-work/<case-id>/ in your own project. Ensure raw log evidence is Git-ignored there. mcp-server-logs does not write into your project.
 7. Correlate log timestamps, request IDs/RCIDs, errors, and service calls with the source code. Report the evidence and source file/line for each conclusion, distinguish confirmed facts from hypotheses, and state what evidence is still missing.
 
@@ -55,9 +55,9 @@ export function registerQueryTools(server: McpServer, prefix: string, service: L
 
   server.registerTool(`${prefix}query_logs`, {
     title: 'Query logs',
-    description: 'Query logs from Seq or OpenObserve. For OpenObserve, provide its organization identifier and stream or SQL; use list_openobserve_stream_schema before composing SQL, use only discovered field names, and set a narrow from/to time range plus limit (max 500).',
+    description: "Query logs from one provider: provider, else OpenObserve when its account (this env) is configured, else Seq. For OpenObserve, provide its organization identifier and stream or SQL; use list_openobserve_stream_schema before composing SQL, use only discovered field names, and set a narrow from/to time range plus limit (max 500). OpenObserve SQL and stream queries are answered from ai-context when the same search is cached there.",
     inputSchema: {
-      provider: z.string().optional().describe("Specific provider to query ('seq' or 'openobserve')."),
+      provider: z.string().optional().describe("Provider to query ('seq' or 'openobserve'). Omit for the default: OpenObserve when its account for this env is configured, else Seq."),
       organization: z.string().optional().describe('OpenObserve organization identifier returned by list_openobserve_organizations.'),
       stream: z.string().optional().describe('OpenObserve log stream returned by list_openobserve_streams; inspect its schema before writing SQL.'),
       query: z.string().optional().describe('Seq filter expression or one read-only OpenObserve SELECT statement. Use fields from stream schema.'),
@@ -69,8 +69,9 @@ export function registerQueryTools(server: McpServer, prefix: string, service: L
     },
     annotations: READ_REMOTE,
   }, ({ env: e, ...args }) => runIn('query_logs', e, async () => {
-    const logs = await service.queryLogs(args);
-    return json({ total: logs.length, query: args.query || '*', provider: args.provider || 'all-configured', logs });
+    const provider = service.resolveProvider(args.provider).name;
+    const logs = await service.queryLogs({ ...args, provider });
+    return json({ total: logs.length, query: args.query || '*', provider, logs });
   }, 'Log query error: '));
 }
 

@@ -1,7 +1,7 @@
 import { openObserveAccount, openObserveAccountFor } from '../config.js';
-import { cloneLogsToAiContext, cloneRcidToAiContext, findCachedLogs, findCachedRcid } from '../ai-context/index.js';
+import { cloneLogsToAiContext, cloneRcidToAiContext, findCachedLogs, findCachedQuery, findCachedRcid } from '../ai-context/index.js';
 import { ExportAggregates, LogEntry, LogLevel, LogProvider, LogQuery, ProviderStatus, RequestFlow } from '../types.js';
-import { FLOW_ID_FIELDS, LEVEL_ALIASES, normalizeLogLevel, parseTimeBound, resolveLevels } from './base.js';
+import { FLOW_ID_FIELDS, LEVEL_ALIASES, normalizeLogLevel, resolveLevels, searchWindow } from './base.js';
 import {
   LEVEL_WORDS, OpenObserveField, deploymentName, detectShape, levelFromText, noiseWhere, quoteIdentifier, quoteString, selectColumns, serviceOf, stripAnsi,
 } from './openobserve-sql.js';
@@ -45,6 +45,11 @@ const MESSAGE_FIELDS = new Set(['message', 'body', 'log', 'msg']);
 const FLOW_CONCURRENCY = 5;
 const FLOW_BATCH = 50;
 const FLOW_PAD_MS = 15 * 60_000;
+/** Stream lists and stream schemas are reused this long per account and organization. */
+// ponytail: a stream created or a field added upstream shows up after at most 5 minutes; lower it if that is too slow.
+const METADATA_TTL_MS = 5 * 60_000;
+/** The stream named after the first FROM of a SQL search: where its ai-context copy is filed. */
+const streamOf = (sql: string) => sql.match(/FROM\s+["']?([^"'\s,;)]+)["']?/i)?.[1];
 
 export { levelFromText, type OpenObserveField };
 
@@ -65,8 +70,15 @@ export interface OpenObserveSearch {
   onProgress?: (rows: number) => void;
 }
 
+export interface CachedSearch { logs: LogEntry[]; cached: boolean; from: string; to: string }
+
+const accountKey = (account: Account) => `${account.url}|${account.email}|${account.token}`;
+
 export class OpenObserveProvider implements LogProvider {
   public readonly name = 'openobserve';
+
+  /** `now` is the clock for the metadata cache and relative time bounds (tests pass a fake one). */
+  constructor(private readonly now: () => number = Date.now) {}
 
   public getStatus(): ProviderStatus {
     const account = openObserveAccount();
@@ -134,9 +146,33 @@ export class OpenObserveProvider implements LogProvider {
 
   // ponytail: 60s TTL, so a revoked organization stays usable for up to 60s; drop the TTL if that is unacceptable.
   private orgCache = new Map<string, { at: number; organizations: OpenObserveOrganization[] }>();
+  /** Stream lists and schemas by account + organization (+ stream): the promise, so parallel callers share one request. */
+  private metadata = new Map<string, { at: number; value: Promise<unknown> }>();
+
+  /** `load()` once per `key` per METADATA_TTL_MS; a failed load is forgotten so the next call retries. */
+  private remember<T>(key: string, load: () => Promise<T>): Promise<T> {
+    const hit = this.metadata.get(key);
+    if (hit && this.now() - hit.at < METADATA_TTL_MS) return hit.value as Promise<T>;
+    const entry = { at: this.now(), value: load() };
+    this.metadata.set(key, entry);
+    entry.value.catch(() => { if (this.metadata.get(key) === entry) this.metadata.delete(key); });
+    return entry.value;
+  }
+
+  /** Absolute [from, to) of a search (relative bounds count from the minute start, see searchWindow); throws when empty or invalid. */
+  private window(from: string | undefined, to: string | undefined, defaultFrom = '15m'): { from: string; to: string } {
+    const window = searchWindow(from, to, defaultFrom, this.now());
+    if (!window.from || !window.to || Date.parse(window.from) >= Date.parse(window.to)) throw new Error('Invalid time range');
+    return { from: window.from, to: window.to };
+  }
+
+  /** Name of an accessible organization, as ai-context files it ('default' if it vanished from the list). */
+  private async organizationName(organization: string, operationId?: string): Promise<string> {
+    return (await this.listOrganizations(operationId)).find((o) => o.identifier === organization)?.name || 'default';
+  }
 
   public async listOrganizations(operationId: string = randomUUID(), account: Account = openObserveAccount()): Promise<OpenObserveOrganization[]> {
-    const key = `${account.url}|${account.email}|${account.token}`;
+    const key = accountKey(account);
     const cached = this.orgCache.get(key);
     if (cached && Date.now() - cached.at < 60_000) return cached.organizations;
     const result = await this.request('api/organizations', {}, operationId, account) as { data?: Array<Record<string, unknown>> };
@@ -176,38 +212,74 @@ export class OpenObserveProvider implements LogProvider {
     }
   }
 
+  /** Log streams of an accessible organization; the list is reused for METADATA_TTL_MS (the access check is not). */
   public async listStreams(organization: string, operationId: string = randomUUID()): Promise<string[]> {
     await this.requireOrganization(organization, operationId);
-    const result = await this.request(`api/${encodeURIComponent(organization)}/streams?type=logs`, {}, operationId) as { list?: Array<Record<string, unknown>> };
-    if (!Array.isArray(result.list)) throw new Error('Unexpected OpenObserve streams response');
-    const streams = result.list.map((stream) => String(stream.name || '')).filter(Boolean);
-    logger.info('openobserve.streams_loaded', { organization: maskOrg(organization), count: streams.length });
-    return streams;
+    return this.remember(`streams|${accountKey(openObserveAccount())}|${organization}`, async () => {
+      const result = await this.request(`api/${encodeURIComponent(organization)}/streams?type=logs`, {}, operationId) as { list?: Array<Record<string, unknown>> };
+      if (!Array.isArray(result.list)) throw new Error('Unexpected OpenObserve streams response');
+      const streams = result.list.map((stream) => String(stream.name || '')).filter(Boolean);
+      logger.info('openobserve.streams_loaded', { organization: maskOrg(organization), count: streams.length });
+      return streams;
+    });
   }
 
+  /** Fields of an accessible stream, reused for METADATA_TTL_MS like the stream list it is checked against. */
   public async getStreamSchema(organization: string, stream: string): Promise<OpenObserveField[]> {
     const operationId = randomUUID();
     if (!(await this.listStreams(organization, operationId)).includes(stream)) {
       throw new Error(`Log stream '${stream}' is not accessible`);
     }
-    const result = await this.request(`api/${encodeURIComponent(organization)}/streams/${encodeURIComponent(stream)}/schema?type=logs`, {}, operationId) as {
-      schema?: Array<Record<string, unknown>>;
-    };
-    if (!Array.isArray(result.schema)) throw new Error('Unexpected OpenObserve stream schema response');
-    const fields = result.schema.map((field) => ({ name: String(field.name || ''), type: String(field.type || '') }))
-      .filter((field) => field.name && field.type);
-    logger.info('openobserve.schema_loaded', { organization: maskOrg(organization), stream, count: fields.length });
-    return fields;
+    return this.remember(`schema|${accountKey(openObserveAccount())}|${organization}|${stream}`, async () => {
+      const result = await this.request(`api/${encodeURIComponent(organization)}/streams/${encodeURIComponent(stream)}/schema?type=logs`, {}, operationId) as {
+        schema?: Array<Record<string, unknown>>;
+      };
+      if (!Array.isArray(result.schema)) throw new Error('Unexpected OpenObserve stream schema response');
+      const fields = result.schema.map((field) => ({ name: String(field.name || ''), type: String(field.type || '') }))
+        .filter((field) => field.name && field.type);
+      logger.info('openobserve.schema_loaded', { organization: maskOrg(organization), stream, count: fields.length });
+      return fields;
+    });
+  }
+
+  /** Rejects anything but one SELECT before a request is made. */
+  private checkSql(sql: string): void {
+    if (!sql.trim()) throw new Error('SQL query is required');
+    if (!/^SELECT\b/i.test(sql.trim()) || /;\s*\S/.test(sql)) throw new Error('Only a single SELECT query is allowed');
+  }
+
+  /**
+   * search_openobserve_logs and query_logs with SQL: answered from ai-context when a search with the same env,
+   * normalized SQL and absolute window was saved there (findCachedQuery), else from OpenObserve and then saved
+   * (filed under `stream`, default the SQL's FROM stream; empty results are not saved). The access check runs either way.
+   */
+  public async searchCached(params: OpenObserveSearch & { stream?: string }): Promise<CachedSearch> {
+    this.checkSql(params.sql);
+    const operationId = params.operationId || randomUUID();
+    await this.requireOrganization(params.organization, operationId);
+    const { from, to } = this.window(params.from, params.to);
+    const limit = params.limit || 50;
+    const env = openObserveAccount().env;
+    const cached = findCachedQuery({ env, sql: params.sql, from, to }, limit, params.organization);
+    if (cached) {
+      logger.info('ai_context.cache_hit', { kind: 'sql', count: cached.length });
+      return { logs: cached, cached: true, from, to };
+    }
+    const logs = await this.searchLogs({ ...params, from, to, limit, operationId });
+    const stream = params.stream || streamOf(params.sql);
+    if (stream && logs.length > 0) {
+      cloneLogsToAiContext({
+        provider: this.name, env, organization: await this.organizationName(params.organization, operationId), stream, from, to, limit, sql: params.sql,
+      }, params.organization, logs);
+    }
+    return { logs, cached: false, from, to };
   }
 
   public async searchLogs(params: OpenObserveSearch): Promise<LogEntry[]> {
-    if (!params.sql.trim()) throw new Error('SQL query is required');
-    if (!/^SELECT\b/i.test(params.sql.trim()) || /;\s*\S/.test(params.sql)) throw new Error('Only a single SELECT query is allowed');
+    this.checkSql(params.sql);
     const operationId = params.operationId || randomUUID();
     await this.requireOrganization(params.organization, operationId);
-    const from = parseTimeBound(params.from || '15m');
-    const to = params.to ? parseTimeBound(params.to) : new Date().toISOString();
-    if (!from || !to || Date.parse(from) >= Date.parse(to)) throw new Error('Invalid time range');
+    const { from, to } = this.window(params.from, params.to);
     // ponytail: limit may be Infinity = every row held in memory (5000-row pages, 5 time slices in parallel); stream to disk if a range reaches millions of rows.
     const limit = Math.max(params.limit || 50, 1);
     const [start, end] = [Date.parse(from) * 1000, Date.parse(to) * 1000];
@@ -320,13 +392,11 @@ export class OpenObserveProvider implements LogProvider {
     const streams = await this.listStreams(params.organization, operationId);
     if (!streams.includes(params.stream)) throw new Error(`Log stream '${params.stream}' is not accessible`);
     const sql = `SELECT * FROM ${quoteIdentifier(params.stream)} WHERE ${quoteIdentifier(params.field)} = ${quoteString(params.rcid)} ORDER BY _timestamp DESC`;
-    const logs = await this.searchLogs({ ...params, sql, operationId });
+    const { from, to } = this.window(params.from, params.to);
+    const logs = await this.searchLogs({ ...params, sql, from, to, operationId });
     if (logs.length > 0) {
-      const from = parseTimeBound(params.from || '15m') || new Date(Date.now() - 15 * 60_000).toISOString();
-      const to = (params.to ? parseTimeBound(params.to) : undefined) || new Date().toISOString();
-      const org = (await this.listOrganizations(operationId)).find((o) => o.identifier === params.organization);
       cloneRcidToAiContext({
-        provider: this.name, env: openObserveAccount().env, organization: org?.name || 'default', stream: params.stream,
+        provider: this.name, env: openObserveAccount().env, organization: await this.organizationName(params.organization, operationId), stream: params.stream,
         from, to, limit: params.limit || 50,
       }, params.organization, params.rcid, params.field, logs);
     }
@@ -436,27 +506,23 @@ export class OpenObserveProvider implements LogProvider {
    * includeNoise (count them with exportAggregates), and DROP_FIELDS columns are never selected.
    */
   public async searchServiceLogs(params: OpenObserveServiceQuery): Promise<LogEntry[]> {
-    const from = parseTimeBound(params.from || '1h');
-    const to = params.to ? parseTimeBound(params.to) : new Date().toISOString();
-    if (from && to) {
-      const cached = findCachedLogs({ stream: params.stream, service: params.service, levels: params.levels, from, to }, params.organization);
-      if (cached !== undefined) {
-        logger.info('ai_context.cache_hit', { stream: params.stream, service: params.service, count: cached.length });
-        return cached.slice(0, params.limit || 50);
-      }
+    const { from, to } = this.window(params.from, params.to, '1h');
+    const cached = findCachedLogs({ stream: params.stream, service: params.service, levels: params.levels, from, to }, params.organization);
+    if (cached !== undefined) {
+      logger.info('ai_context.cache_hit', { stream: params.stream, service: params.service, count: cached.length });
+      return cached.slice(0, params.limit || 50);
     }
     const q = await this.serviceQuery(params);
     const where = q.noise && !params.includeNoise ? `${q.where} AND NOT ${q.noise}` : q.where;
     const logs = await this.searchLogs({
-      organization: params.organization, from: params.from, to: params.to, limit: params.limit, onProgress: params.onProgress,
+      organization: params.organization, from, to, limit: params.limit, onProgress: params.onProgress,
       sql: `SELECT ${q.columns} FROM ${quoteIdentifier(params.stream)} WHERE ${where} ORDER BY _timestamp DESC`,
     });
     // ponytail: Kubernetes level and service are refined after fetch (level comes from log text), so results may under-fill `limit`.
     const filtered = logs.filter((log) => (!params.service || log.service === params.service) && (!params.levels?.length || params.levels.includes(log.level as LogLevel)));
-    if (from && to && filtered.length > 0) {
-      const org = (await this.listOrganizations()).find((o) => o.identifier === params.organization);
+    if (filtered.length > 0) {
       cloneLogsToAiContext({
-        provider: this.name, env: openObserveAccount().env, organization: org?.name || 'default', stream: params.stream,
+        provider: this.name, env: openObserveAccount().env, organization: await this.organizationName(params.organization), stream: params.stream,
         service: params.service, levels: params.levels, from, to, limit: params.limit || Infinity,
       }, params.organization, filtered);
     }
@@ -504,30 +570,24 @@ export class OpenObserveProvider implements LogProvider {
   }
 
   // ponytail: level is filtered after fetch (level field name varies per stream), so `limit` may under-fill; add a `levelField` param to push it into SQL if that matters.
+  /** SQL `query`: searchCached. `stream` alone: newest rows, from an ai-context export covering the window when there is one. */
   public async queryLogs(params: LogQuery): Promise<LogEntry[]> {
     if (!params.organization) throw new Error('OpenObserve organization is required');
-    if (!params.query && !params.stream) throw new Error('OpenObserve SQL query or stream is required');
-    if (params.stream && !params.query) {
-      const from = parseTimeBound(params.from || '15m');
-      const to = params.to ? parseTimeBound(params.to) : new Date().toISOString();
-      const levels = resolveLevels(params.level);
-      if (from && to) {
-        const cached = findCachedLogs({ stream: params.stream, levels, from, to }, params.organization);
-        if (cached !== undefined) {
-          logger.info('ai_context.cache_hit', { stream: params.stream, count: cached.length });
-          return cached.slice(0, params.limit || 50);
-        }
-      }
+    if (params.query) {
+      return (await this.searchCached({ organization: params.organization, sql: params.query, stream: params.stream, from: params.from, to: params.to, limit: params.limit })).logs;
     }
-    const sql = params.query || `SELECT * FROM "${params.stream!.replace(/"/g, '""')}" ORDER BY _timestamp DESC`;
-    const stream = params.stream || sql.match(/FROM\s+["']?([^"'\s,;)]+)["']?/i)?.[1];
-    const logs = await this.searchLogs({ organization: params.organization, sql, from: params.from, to: params.to, limit: params.limit });
-    if (stream && logs.length > 0) {
-      const from = parseTimeBound(params.from || '15m') || new Date(Date.now() - 15 * 60_000).toISOString();
-      const to = (params.to ? parseTimeBound(params.to) : undefined) || new Date().toISOString();
-      const org = (await this.listOrganizations()).find((o) => o.identifier === params.organization);
+    if (!params.stream) throw new Error('OpenObserve SQL query or stream is required');
+    const { from, to } = this.window(params.from, params.to);
+    const cached = findCachedLogs({ stream: params.stream, levels: resolveLevels(params.level), from, to }, params.organization);
+    if (cached !== undefined) {
+      logger.info('ai_context.cache_hit', { stream: params.stream, count: cached.length });
+      return cached.slice(0, params.limit || 50);
+    }
+    const sql = `SELECT * FROM ${quoteIdentifier(params.stream)} ORDER BY _timestamp DESC`;
+    const logs = await this.searchLogs({ organization: params.organization, sql, from, to, limit: params.limit });
+    if (logs.length > 0) {
       cloneLogsToAiContext({
-        provider: this.name, env: openObserveAccount().env, organization: org?.name || 'default', stream,
+        provider: this.name, env: openObserveAccount().env, organization: await this.organizationName(params.organization), stream: params.stream,
         from, to, limit: params.limit || 50,
       }, params.organization, logs);
     }

@@ -7,6 +7,6 @@
  *   read.ts           listing, opening and deduplicating saved exports
  */
 export { appendFrame, createLhub, readLhub, readLhubHeader, type LhubHeader } from './lhub.js';
-export { fetchWindowMs, localStamp, messageTemplate, timeWindows, uncompact, type ExportResult, type SnapshotMeta } from './model.js';
+export { fetchWindowMs, localStamp, messageTemplate, normalizeSql, queryKey, timeWindows, uncompact, type ExportResult, type SnapshotMeta } from './model.js';
 export { startExport, type ExportOptions } from './export-folder.js';
-export { cloneLogsToAiContext, cloneRcidToAiContext, dropExported, exportDir, findCachedLogs, findCachedRcid, listSnapshots, openSnapshot, snapshotFiles } from './read.js';
+export { cloneLogsToAiContext, cloneRcidToAiContext, dropExported, exportDir, findCachedLogs, findCachedQuery, findCachedRcid, listSnapshots, openSnapshot, snapshotFiles } from './read.js';

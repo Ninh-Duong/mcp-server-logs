@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
-  appendFrame, cloneLogsToAiContext, cloneRcidToAiContext, createLhub, dropExported, findCachedLogs,
-  findCachedRcid, listSnapshots, localStamp, messageTemplate, openSnapshot, readLhub,
+  appendFrame, cloneLogsToAiContext, cloneRcidToAiContext, createLhub, dropExported, exportDir, findCachedLogs, findCachedQuery,
+  findCachedRcid, listSnapshots, normalizeSql, localStamp, messageTemplate, openSnapshot, readLhub,
   readLhubHeader, snapshotFiles, fetchWindowMs, startExport, timeWindows, uncompact,
 } from '../ai-context/index.js';
 import { compact } from '../ai-context/model.js';
@@ -303,4 +303,24 @@ test('findCachedRcid, findCachedLogs, cloneLogsToAiContext, and cloneRcidToAiCon
 
   const rcidMiss = findCachedRcid('shop', 'non-existent-rcid', KEY, base);
   assert.equal(rcidMiss, undefined);
+});
+
+test('findCachedQuery: same normalized SQL, env and window under the organization key; others and broken copies miss', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ai-context-query-'));
+  const rows = [entry('2026-10-07T09:30:00Z', 'Error', 'Shop.Api', 'b'), entry('2026-10-07T09:10:00Z', 'Information', 'Shop.Api', 'a')];
+  const snap = cloneLogsToAiContext(meta(9, 10, { sql: 'SELECT * FROM "shop"\n  WHERE x', limit: 5 }), KEY, rows, base)!;
+  const search = { env: 'prod', sql: 'SELECT * FROM "shop" WHERE x', from: hour(9), to: hour(10) };
+  assert.deepEqual(findCachedQuery(search, 5, KEY, base)?.map((l) => l.message), ['b', 'a'], 'result order, not time order');
+  assert.deepEqual(findCachedQuery(search, 1, KEY, base)?.map((l) => l.message), ['b']);
+  assert.equal(findCachedQuery(search, 500, KEY, base)?.length, 2, '2 rows < limit 5: the cache held every row');
+  assert.equal(findCachedQuery(search, 5, 'other-org-key', base), undefined, 'another organization');
+  assert.equal(findCachedQuery({ ...search, env: 'dev' }, 5, KEY, base), undefined);
+  assert.equal(findCachedQuery({ ...search, to: hour(11) }, 5, KEY, base), undefined);
+
+  const header = JSON.stringify(readLhubHeader(join(exportDir(snap, base), 'SUMMARY.lhub')));
+  assert.match(header, /"query":"[0-9a-f]{32}","limit":5/);
+  assert.doesNotMatch(header, /SELECT|org-key/, 'the plaintext header shows neither the SQL nor the identifier');
+  rmSync(join(exportDir(snap, base), 'query.lhub'));
+  assert.equal(findCachedQuery(search, 5, KEY, base), undefined, 'a copy without query.lhub misses');
+  assert.equal(normalizeSql('  SELECT  "a  b"\n FROM t WHERE c = \'x  y\'  '), 'SELECT "a  b" FROM t WHERE c = \'x  y\'', 'quoted text keeps its spaces');
 });

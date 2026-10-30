@@ -106,6 +106,8 @@ test('list_log_providers and query_logs', async () => {
   fakeStream();
   const result = await data(client, 'query_logs', { provider: 'openobserve', organization: 'org-id', stream: 's', from: '1h' });
   assert.deepEqual([result.total, result.provider, result.query], [2, 'openobserve', '*']);
+  const byDefault = await data(client, 'query_logs', { organization: 'org-id', query: 'SELECT * FROM "s" WHERE 3=3', from: '1h' });
+  assert.deepEqual([byDefault.total, byDefault.provider], [2, 'openobserve'], 'without provider: the configured OpenObserve account');
 });
 
 test('OpenObserve discovery and search tools', async () => {
@@ -117,7 +119,8 @@ test('OpenObserve discovery and search tools', async () => {
   const services = await data(client, 'list_openobserve_services', { organization: 'org-id', stream: 's' });
   assert.deepEqual([services.from, services.field, services.services.map((s: { name: string }) => s.name)], ['1h', 'service_name', ['Shop.Api', 'Shop.Email']]);
 
-  const errors = await data(client, 'get_openobserve_service_logs', { organization: 'org-id', stream: 's', level: 'Warning' });
+  // 2h: not covered by the 1h stream query an earlier test saved, so this one searches OpenObserve.
+  const errors = await data(client, 'get_openobserve_service_logs', { organization: 'org-id', stream: 's', level: 'Warning', from: '2h' });
   assert.deepEqual(errors.logs.map((l: { message: string }) => l.message), ['Order 1 failed'], "one level = that level or more severe");
   assert.match(sqls.at(-1)!, /"severity" IN \('Warning'/);
 
@@ -126,7 +129,13 @@ test('OpenObserve discovery and search tools', async () => {
   assert.match(sqls.at(-1)!, /WHERE "rcid" = 'r2'/, 'default field rcid');
 
   const search = await data(client, 'search_openobserve_logs', { organization: 'org-id', sql: 'SELECT * FROM "s"' });
-  assert.deepEqual([search.total, search.search.from, search.search.limit], [2, '15m', 50]);
+  assert.deepEqual([search.total, search.search.from, search.search.limit, search.cached], [2, '15m', 50, false]);
+  assert.equal(Date.parse(search.window.to) - Date.parse(search.window.from), 15 * 60_000);
+  assert.equal(Date.parse(search.window.to) % 60_000, 0, 'the default end is the start of the current minute');
+  const searches = sqls.length;
+  const repeat = await data(client, 'search_openobserve_logs', { organization: 'org-id', sql: 'SELECT *  FROM "s"', ...search.window });
+  assert.deepEqual([repeat.cached, repeat.logs], [true, search.logs], 'the same SQL and window is answered from ai-context');
+  assert.equal(sqls.length, searches, 'without a new OpenObserve search');
   const bad = await call(client, 'search_openobserve_logs', { organization: 'org-id', sql: 'DROP TABLE s' });
   assert.deepEqual([bad.isError, bad.text], [true, 'Only a single SELECT query is allowed']);
   assert.doesNotMatch(logger.getRecentLogs(5).join('\n'), /Only a single SELECT/, 'tool failures log only the error type');
@@ -190,7 +199,7 @@ test('one server serves every environment: OpenObserve tools take env', async ()
   await data(client, 'list_openobserve_streams', { env: 'prod', organization: 'org-id' });
   assert.deepEqual([...new Set(hosts)], ['prod.example.test'], 'env picks config/openobserve.prod.env for this call');
   hosts.length = 0;
-  await data(client, 'list_openobserve_streams', { organization: 'org-id' });
+  await data(client, 'search_openobserve_logs', { organization: 'org-id', sql: 'SELECT * FROM "s" WHERE 2=2' });
   assert.deepEqual([...new Set(hosts)], ['logs.example.test'], 'without env: the server default account');
 
   const exported = await data(client, 'export_openobserve_logs', { env: 'prod', organization: 'org-id', stream: 's', from: '1h' });

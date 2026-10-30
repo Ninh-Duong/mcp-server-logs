@@ -156,7 +156,7 @@ Other clients: add `mcp-server-logs` to `claude_desktop_config.json`, `.cursor/m
 
 ### Using the encrypted ai-context exports
 
-Exports (`export_openobserve_logs`, or **Save to ai-context** in the CLI) are encrypted folders under `ai-context/`. You never open the `.lhub` files yourself: ask your AI agent, which reads them through the MCP tools.
+Exports (`export_openobserve_logs`, or **Save to ai-context** in the CLI) are encrypted folders under `ai-context/`. Live searches are saved there too, so the same search repeated (same SQL, environment and window; relative bounds such as `15m` count from the start of the current minute) is answered locally without calling OpenObserve; see [Use from an AI Agent](docs/OPENOBSERVE_GUIDE.md#4-use-from-an-ai-agent). You never open the `.lhub` files yourself: ask your AI agent, which reads them through the MCP tools.
 
 ```
 You: "List the ai-context exports" / "Read the SUMMARY of <folder>: which error happens most?" / "Open the flow of rcid X and compare it with the Shop.Email source"

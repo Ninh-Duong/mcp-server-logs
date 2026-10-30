@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { sep } from 'node:path';
+import { dirname, sep } from 'node:path';
 import { test } from 'node:test';
 import { config, LOGS_DIR } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -46,7 +46,7 @@ test('CLI mode prints only warnings and errors; info stays in the log file', () 
 test('partitions log files by year and month: logs/YYYY/MM/mcp-process-YYYY-MM-DD.log', () => {
   const filePath = logger.getLogFilePath('2026-10-22T10:00:00.000Z');
   assert.ok(filePath.endsWith(['2026', '10', 'mcp-process-2026-10-22.log'].join(sep)));
-  assert.ok(existsSync(filePath));
+  assert.ok(existsSync(dirname(filePath)), 'the month folder is created; the file appears with the first line logged that day');
 });
 
 test('preflight reports each provider and the logs folder', () => {

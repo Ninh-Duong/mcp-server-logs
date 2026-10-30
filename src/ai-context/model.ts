@@ -1,4 +1,5 @@
 /** What an export is made of: its parameters, how a log becomes a line / pattern / flow id, folder names and fetch windows. */
+import { createHmac } from 'node:crypto';
 import { join, sep } from 'node:path';
 import { AI_CONTEXT_TIME_ZONE } from '../config.js';
 import { FLOW_ID_FIELDS } from '../providers/base.js';
@@ -56,6 +57,21 @@ const DROP_KEYS = new Set(['_timestamp', 'message', 'body', 'log', 'msg', 'level
 
 export const safe = (value: string) => value.replace(/[^\w.-]+/g, '_').replace(/^\.+/, '_').slice(0, 80) || '_';
 export const toPosix = (path: string) => path.split(sep).join('/');
+
+/** SQL with whitespace runs outside quoted strings and identifiers collapsed to one space, trimmed. */
+export function normalizeSql(sql: string): string {
+  return sql.split(/('(?:[^']|'')*'|"(?:[^"]|"")*")/).map((part, i) => (i % 2 ? part : part.replace(/\s+/g, ' '))).join('').trim();
+}
+
+/**
+ * Cache key of one SQL search: HMAC-SHA256 of env, normalized SQL and the absolute window, keyed by the organization
+ * identifier. It goes into a plaintext SUMMARY header: it shows neither the SQL nor the identifier, and another
+ * organization's key never matches.
+ */
+export function queryKey(search: { env?: string; sql: string; from: string; to: string }, orgKey: string): string {
+  const window = [search.from, search.to].map((t) => new Date(t).toISOString());
+  return createHmac('sha256', orgKey).update([search.env || 'default', normalizeSql(search.sql), ...window].join('\n')).digest('hex').slice(0, 32);
+}
 
 /** "20261015-0935" in AI_CONTEXT_TIME_ZONE (UTC by default). */
 export function localStamp(iso: string, timeZone = AI_CONTEXT_TIME_ZONE): string {

@@ -2,9 +2,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { openObserveProvider } from '../providers/index.js';
-import { openObserveAccount } from '../config.js';
-import { cloneLogsToAiContext } from '../ai-context/index.js';
-import { parseTimeBound } from '../providers/base.js';
 import { resolveLevels } from '../providers/base.js';
 import { READ_REMOTE, env, json, level, limit, organization, runIn, stream, to } from './common.js';
 
@@ -18,14 +15,14 @@ export function registerOpenObserveTools(server: McpServer, prefix: string): voi
 
   server.registerTool(`${prefix}list_openobserve_streams`, {
     title: 'List OpenObserve log streams',
-    description: 'List log streams of type logs in an accessible OpenObserve organization. Call this before schema discovery or SQL search.',
+    description: 'List log streams of type logs in an accessible OpenObserve organization. Call this before schema discovery or SQL search. The list is cached for 5 minutes.',
     inputSchema: { env, organization },
     annotations: READ_REMOTE,
   }, ({ env: e, ...args }) => runIn('list_openobserve_streams', e, async () => json({ organization: args.organization, streams: await openObserveProvider.listStreams(args.organization) })));
 
   server.registerTool(`${prefix}list_openobserve_stream_schema`, {
     title: 'List stream fields',
-    description: 'Return field names and types for an accessible OpenObserve log stream. Call this before composing SQL; only query fields returned here.',
+    description: 'Return field names and types for an accessible OpenObserve log stream. Call this before composing SQL; only query fields returned here. The schema is cached for 5 minutes.',
     inputSchema: { env, organization, stream },
     annotations: READ_REMOTE,
   }, ({ env: e, ...args }) => runIn('list_openobserve_stream_schema', e, async () =>
@@ -70,7 +67,7 @@ export function registerOpenObserveTools(server: McpServer, prefix: string): voi
 
   server.registerTool(`${prefix}search_openobserve_logs`, {
     title: 'Search with SQL',
-    description: 'Run a read-only OpenObserve SQL SELECT against an accessible organization. Discover the stream fields first; use quoted identifiers, a narrow from/to window (ISO 8601 with timezone or supported relative values), and limit 1-500 (start at 100 or less).',
+    description: 'Run a read-only OpenObserve SQL SELECT against an accessible organization. Discover the stream fields first; use quoted identifiers, a narrow from/to window (ISO 8601 with timezone or supported relative values), and limit 1-500 (start at 100 or less). Cache first: the same SQL (whitespace aside), organization, env and window is answered from ai-context (cached: true) without calling OpenObserve; relative bounds and the default end count from the start of the current minute (window shows the bounds used).',
     inputSchema: {
       env, organization,
       sql: z.string().min(1).describe('Exactly one SELECT statement against the chosen stream. Discover stream fields first and quote identifiers.'),
@@ -80,17 +77,7 @@ export function registerOpenObserveTools(server: McpServer, prefix: string): voi
     },
     annotations: READ_REMOTE,
   }, ({ env: e, ...args }) => runIn('search_openobserve_logs', e, async () => {
-    const logs = await openObserveProvider.searchLogs(args);
-    const stream = args.sql.match(/FROM\s+["']?([^"'\s,;)]+)["']?/i)?.[1];
-    if (stream && logs.length > 0) {
-      const from = parseTimeBound(args.from || '15m') || new Date(Date.now() - 15 * 60_000).toISOString();
-      const to = (args.to ? parseTimeBound(args.to) : undefined) || new Date().toISOString();
-      const org = (await openObserveProvider.listOrganizations()).find((o) => o.identifier === args.organization);
-      cloneLogsToAiContext({
-        provider: openObserveProvider.name, env: openObserveAccount().env, organization: org?.name || 'default', stream,
-        from, to, limit: args.limit,
-      }, args.organization, logs);
-    }
-    return json({ total: logs.length, search: args, logs });
+    const { logs, cached, from, to } = await openObserveProvider.searchCached(args);
+    return json({ total: logs.length, search: args, window: { from, to }, cached, logs });
   }));
 }

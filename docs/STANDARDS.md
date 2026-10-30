@@ -60,12 +60,13 @@ All tools and providers must accept both ISO 8601 timestamps and human-friendly 
 - `'24h'` or `'1d'` -> 24 hours before now
 - `'7d'` or `'1w'` -> 7 days before now
 - Standard ISO strings: `2026-09-28T00:00:00Z`; a date and time without zone (`2026-10-07 09:00`) is local time.
+- OpenObserve searches count relative bounds and the default end (now) from the start of the current minute (`searchWindow`), so their granularity is one minute: repeated searches within a minute share one window and one ai-context cache entry, and rows from the last < 1 minute appear from the next minute on. ISO bounds are used as given.
 
 ---
 
 ## 6. Error Handling & Resilience Contract
 
-1. **Provider Isolation**: If one provider is unreachable or returns an HTTP 500 error during a multi-provider broadcast query, it must NOT fail the entire request. The error is logged to `logs/YYYY/MM/mcp-process-YYYY-MM-DD.log` and results from healthy providers are returned.
+1. **One provider per query**: `query_logs` queries the named provider, else OpenObserve when its account for the call's `env` is configured, else Seq; it never fans out. A provider error is returned to the caller as a tool error (and logged to `logs/YYYY/MM/mcp-process-YYYY-MM-DD.log` without its message); a provider that is not configured never stops the server from serving the others.
 2. **Timeouts**: Every external HTTP call sets `AbortSignal.timeout(...)`: 15 s by default, 60 s for an OpenObserve `_search` page (5,000 rows take 2-8 s on a busy server). Never leave an HTTP connection open indefinitely.
 3. **Retries**: OpenObserve network errors, timeouts, 429 and 502-504 are retried after 1 s, 3 s and 9 s; other HTTP errors fail at once.
 4. **Graceful Unconfigured State**: If environment variables for a provider are missing (or still hold the example placeholders), the server must mark that provider as `unconfigured` during preflight and continue running for other providers.

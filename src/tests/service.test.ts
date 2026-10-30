@@ -24,29 +24,34 @@ function bothProviders(openObserveStatus = 200): string[] {
   return hosts;
 }
 
-test('broadcast merges every configured provider newest first and cuts to the limit', async () => {
-  bothProviders();
-  const logs = await defaultLogsService.queryLogs({ organization: 'org-id', stream: 's', from: '2026-01-01T00:00:00Z', to: '2026-01-01T01:00:00Z', limit: 3 });
-  assert.deepEqual(logs.map((l) => l.message), ['oo 3', 'seq 2', 'oo 1']);
-});
+const hour1 = (h: number) => ({ from: `2026-01-01T0${h}:00:00Z`, to: `2026-01-01T0${h + 1}:00:00Z` });
 
-test('broadcast skips OpenObserve without an organization and a stream or SQL', async () => {
+test('without provider: only OpenObserve is queried when its account is configured', async () => {
   const hosts = bothProviders();
-  const logs = await defaultLogsService.queryLogs({ organization: 'org-id' });
-  assert.deepEqual(logs.map((l) => l.provider), ['seq', 'seq']);
-  assert.deepEqual([...new Set(hosts)], ['seq.example.test']);
+  const logs = await defaultLogsService.queryLogs({ organization: 'org-id', stream: 's', ...hour1(0), limit: 3 });
+  assert.deepEqual(logs.map((l) => l.message), ['oo 3', 'oo 1']);
+  assert.deepEqual([...new Set(hosts)], ['logs.example.test:10443'], 'Seq is not called');
+  assert.equal(defaultLogsService.resolveProvider().name, 'openobserve');
 });
 
-test('a failing provider does not fail the broadcast', async () => {
-  bothProviders(500);
-  const logs = await defaultLogsService.queryLogs({ organization: 'org-id', stream: 's' });
+test('without provider: Seq when OpenObserve has no account', async () => {
+  const hosts = bothProviders();
+  config.openobserve = { env: undefined, url: '', email: '', token: '' };
+  const logs = await defaultLogsService.queryLogs({ query: 'x' });
   assert.deepEqual(logs.map((l) => l.message), ['seq 2', 'seq 0']);
+  assert.deepEqual([...new Set(hosts)], ['seq.example.test'], 'OpenObserve is not called');
 });
 
-test('no configured provider returns nothing; an unknown provider is an error', async () => {
+test('a failing default provider is an error, not an empty result', async () => {
+  bothProviders(500);
+  await assert.rejects(defaultLogsService.queryLogs({ organization: 'org-id', stream: 's', ...hour1(2) }), /OpenObserve HTTP 500/);
+  await assert.rejects(defaultLogsService.queryLogs({ query: 'x' }), /OpenObserve organization is required/, 'OpenObserve calls need an organization');
+});
+
+test('no configured provider and an unknown provider are errors', async () => {
   config.seq = { serverUrl: '', apiKey: '' };
   config.openobserve = { env: undefined, url: '', email: '', token: '' };
-  assert.deepEqual(await defaultLogsService.queryLogs({ query: 'x' }), []);
+  await assert.rejects(defaultLogsService.queryLogs({ query: 'x' }), /No log provider is configured/);
   await assert.rejects(defaultLogsService.queryLogs({ provider: 'loki' }), /Unknown provider 'loki'. Available: seq, openobserve/);
 });
 

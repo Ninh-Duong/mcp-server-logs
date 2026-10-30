@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeLogLevel, parseTimeBound, resolveLevels } from '../providers/base.js';
+import { normalizeLogLevel, parseTimeBound, resolveLevels, searchWindow } from '../providers/base.js';
 import { getAllProviders, getProvider, listProviders } from '../providers/index.js';
 import { LOG_LEVELS } from '../types.js';
 
@@ -43,4 +43,15 @@ test('finds providers by name, case-insensitively', () => {
 test('normalizes the short level names of Serilog and others', () => {
   const cases: Array<[string, string]> = [['VRB', 'Verbose'], ['TRC', 'Verbose'], ['DBG', 'Debug'], ['INF', 'Information'], ['WRN', 'Warning'], ['FTL', 'Fatal'], ['CRT', 'Fatal']];
   for (const [raw, level] of cases) assert.equal(normalizeLogLevel(raw), level, raw);
+});
+
+test('search windows count relative bounds from the minute start and keep ISO bounds', () => {
+  const now = Date.parse('2026-10-07T12:00:30.250Z');
+  assert.deepEqual(searchWindow('15m', undefined, '1h', now), { from: '2026-10-07T11:45:00.000Z', to: '2026-10-07T12:00:00.000Z' });
+  assert.deepEqual(searchWindow(undefined, '5m', '1h', now), { from: '2026-10-07T11:00:00.000Z', to: '2026-10-07T11:55:00.000Z' });
+  assert.deepEqual(searchWindow('2026-10-07T11:00:00.123Z', '2026-10-07T11:30:00Z', '1h', now), { from: '2026-10-07T11:00:00.123Z', to: '2026-10-07T11:30:00.000Z' });
+  assert.deepEqual(searchWindow('2026-10-07T12:00:10Z', undefined, '1h', now), { from: '2026-10-07T12:00:10.000Z', to: '2026-10-07T12:00:30.250Z' },
+    'an ISO start inside the current minute ends now, not before it starts');
+  assert.equal(searchWindow('soon', undefined, '1h', now).from, undefined);
+  assert.equal(parseTimeBound('1h', now), '2026-10-07T11:00:30.250Z', 'parseTimeBound takes a clock');
 });
