@@ -67,6 +67,7 @@ If you use [mcp-hub](../mcp-hub/README.md), the hub starts this server for you; 
 - Clone this repo next to `mcp-hub`, in the same parent folder: the hub template runs `node start.mjs` with `cwd: ../mcp-server-logs`.
 - Setup steps: `../mcp-hub/README.md` (Default setup). Tool contract: `../mcp-hub/docs/mcps/mcp-server-logs.md`.
 - Fill `config/openobserve.<env>.env` for dev, stg and prod (the hub smoke check calls each), then run `node start.mjs --preflight` once before first use.
+- `hub-requirements.json` lists the settings the hub checks in its file: an OpenObserve dev account or Seq. A gap shows as **Config incomplete** in the mcp-hub desktop app; the server still starts and uses its own `config/*.env` files.
 - Do not also register a direct `mcp-logs` server in the same client; every tool would appear twice.
 - The hub exposes the tools as `logs__<tool>` (e.g. `logs__query_logs`). It does not forward this server's MCP instructions or prompts (`investigate_api_bug`, `analyze_ai_context`); agents get the hub's contract instead.
 

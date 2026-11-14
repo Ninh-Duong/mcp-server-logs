@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "label": "OpenObserve or Seq",
+      "anyOf": [
+        ["openobserve.dev.url", "openobserve.dev.email", "openobserve.dev.token"],
+        ["seq.server_url", "seq.api_key"]
+      ]
+    }
+  ]
+}
