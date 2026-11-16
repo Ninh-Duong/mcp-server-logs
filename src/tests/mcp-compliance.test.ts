@@ -19,7 +19,7 @@ test('MCP Specification: Tool definitions, naming syntax, and annotations compli
   const { client } = await createClient();
   const { tools } = await client.listTools();
 
-  assert.equal(tools.length, 12, 'exactly 12 tools registered');
+  assert.equal(tools.length, 13, 'exactly 13 tools registered');
 
   const MCP_NAME_REGEX = /^[a-zA-Z0-9_-]{1,64}$/;
 

@@ -147,6 +147,16 @@ export function openObserveAccountSource(env: string): ConfigSource {
   return real(hub.openobserve?.[key]?.url) ? 'hub' : url ? 'local' : 'unset';
 }
 
+/**
+ * Where the log account the Hub requires (hub-requirements.json group `log_account`) comes from: the OpenObserve
+ * dev account (url, email, token) when complete, else Seq (server URL and API key), else unset. Names only, no values.
+ */
+export function logAccountSource(): ConfigSource {
+  const dev = openObserveAccountFor('dev');
+  if (dev.url && dev.email && dev.token) return openObserveAccountSource('dev');
+  return config.seq.serverUrl && config.seq.apiKey ? seqSource : 'unset';
+}
+
 /** Switches the active OpenObserve account to the one saved for `env`. */
 export function useOpenObserveEnv(env: string): void {
   config.openobserve = openObserveAccountFor(env);

@@ -27,7 +27,7 @@ test('MCP stdio: stdout carries only JSON-RPC and lists every tool', async () =>
     assert.match(instructions, /never open.*\.lhub/i);
     send({ method: 'notifications/initialized' });
     send({ id: 2, method: 'tools/list' });
-    assert.equal((await reply(2))?.result?.tools?.length, 12);
+    assert.equal((await reply(2))?.result?.tools?.length, 13);
   } finally {
     child.kill();
   }

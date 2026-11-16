@@ -14,7 +14,7 @@ const oldFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = oldFetch; });
 
 const TOOLS = [
-  'list_log_providers', 'query_logs', 'list_openobserve_organizations', 'list_openobserve_streams', 'list_openobserve_stream_schema',
+  'list_log_providers', 'config_status', 'query_logs', 'list_openobserve_organizations', 'list_openobserve_streams', 'list_openobserve_stream_schema',
   'list_openobserve_services', 'get_openobserve_service_logs', 'export_openobserve_logs', 'list_ai_context_snapshots', 'read_ai_context',
   'find_openobserve_logs_by_rcid', 'search_openobserve_logs',
 ];
@@ -108,6 +108,16 @@ test('list_log_providers and query_logs', async () => {
   assert.deepEqual([result.total, result.provider, result.query], [2, 'openobserve', '*']);
   const byDefault = await data(client, 'query_logs', { organization: 'org-id', query: 'SELECT * FROM "s" WHERE 3=3', from: '1h' });
   assert.deepEqual([byDefault.total, byDefault.provider], [2, 'openobserve'], 'without provider: the configured OpenObserve account');
+});
+
+test('config_status reports the log account source only, without values', async () => {
+  const client = await connect();
+  const tool = (await client.listTools()).tools.find((t) => t.name === 'config_status')!;
+  assert.deepEqual([tool.annotations?.readOnlyHint, tool.annotations?.openWorldHint, tool.annotations?.idempotentHint], [true, false, true]);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties ?? {}), []);
+  const { text, isError } = await call(client, 'config_status');
+  assert.equal(isError, false, text);
+  assert.deepEqual(JSON.parse(text), { groups: { log_account: 'unset' } }, 'the test config has no dev account and no Seq');
 });
 
 test('OpenObserve discovery and search tools', async () => {

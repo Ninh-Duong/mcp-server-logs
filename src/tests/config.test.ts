@@ -147,3 +147,26 @@ test('per-environment Seq files no longer override the Seq account', async () =>
   const { stdout } = await runModule(printAccount, { CONFIG_DIR: dir, OPENOBSERVE_ENV: 'dev', SEQ_SERVER_URL: 'https://seq.example.test', SEQ_API_KEY: 'real' });
   assert.deepEqual(JSON.parse(stdout).seq, { serverUrl: 'https://seq.example.test', apiKey: 'real' });
 });
+
+const printLogAccount = `const { logAccountSource } = await import('./dist/config.js'); process.stdout.write(logAccountSource());`;
+const logAccount = async (vars: Record<string, string>) => (await runModule(printLogAccount, vars)).stdout;
+
+test('logAccountSource: the OpenObserve dev account from the hub file wins over Seq', async () => {
+  const central = hubFile({ openobserve: { dev: { url: 'https://hub-dev.example.test', email: 'h@example.test', token: 'ht' } } });
+  const dir = configDir({ 'seq.env': 'SEQ_SERVER_URL=http://local-seq\nSEQ_API_KEY=local\n' });
+  assert.equal(await logAccount({ CONFIG_DIR: dir, CENTRAL_CONFIG_PATH: central }), 'hub');
+});
+
+test('logAccountSource: the dev account from config/openobserve.dev.env is local', async () => {
+  assert.equal(await logAccount({ CONFIG_DIR: configDir({ 'openobserve.dev.env': account('https://dev.example.test') }) }), 'local');
+});
+
+test('logAccountSource: Seq set by client variables is env when dev is incomplete', async () => {
+  const dir = configDir({ 'openobserve.dev.env': 'OPENOBSERVE_URL=https://dev.example.test\n' });
+  assert.equal(await logAccount({ CONFIG_DIR: dir, SEQ_SERVER_URL: 'https://seq.example.test', SEQ_API_KEY: 'k' }), 'env');
+});
+
+test('logAccountSource: unset without a complete dev account or Seq', async () => {
+  assert.equal(await logAccount({ CONFIG_DIR: configDir({}) }), 'unset');
+  assert.equal(await logAccount({ CONFIG_DIR: configDir({ 'seq.env': 'SEQ_SERVER_URL=http://local-seq\n' }) }), 'unset', 'Seq needs its API key too');
+});

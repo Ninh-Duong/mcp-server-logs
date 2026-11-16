@@ -6,7 +6,7 @@ import { PROJECT_ROOT } from '../config.js';
 
 // The mcp-hub desktop app reads this file to warn about settings the Hub file leaves empty. The file names
 // key paths only; this test keeps it in the format mcp-hub expects and to the sections this server reads.
-type Requirements = { version: number; groups: { label: string; anyOf: string[][] }[] };
+type Requirements = { version: number; groups: { id?: string; label: string; anyOf: string[][] }[] };
 
 const requirements = JSON.parse(readFileSync(join(PROJECT_ROOT, 'hub-requirements.json'), 'utf8')) as Requirements;
 const KEY_PATH = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
@@ -23,6 +23,10 @@ test('hub-requirements.json is version 1 with groups of key paths', () => {
       for (const key of alternative) assert.match(key, KEY_PATH);
     }
   }
+});
+
+test('the log account group has the id config_status reports', () => {
+  assert.deepEqual(requirements.groups.map((g) => g.id), ['log_account']);
 });
 
 test('every required key sits in a section this server reads from the Hub file', () => {

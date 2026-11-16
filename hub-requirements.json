@@ -2,6 +2,7 @@
   "version": 1,
   "groups": [
     {
+      "id": "log_account",
       "label": "OpenObserve or Seq",
       "anyOf": [
         ["openobserve.dev.url", "openobserve.dev.email", "openobserve.dev.token"],

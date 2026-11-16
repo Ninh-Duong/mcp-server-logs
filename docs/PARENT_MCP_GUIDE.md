@@ -39,7 +39,7 @@ const transport = new StdioServerTransport();
 await masterServer.connect(transport);
 ```
 
-`registerLogsTools` registers 12 tools and 2 prompts (`investigate_api_bug`, `analyze_ai_context`), all with the prefix (see the list in [AGENTS.md](../AGENTS.md#4-mcp-tools-reference)). Every tool has a `title` and annotations: all are read-only except `export_openobserve_logs`, which writes a new folder under `ai-context/`. Agents can start with a prompt and follow its tool workflow. In-process, the mcp-server-logs reads its accounts from its own `config/` folder and environment variables, as in standalone mode.
+`registerLogsTools` registers 13 tools and 2 prompts (`investigate_api_bug`, `analyze_ai_context`), all with the prefix (see the list in [AGENTS.md](../AGENTS.md#4-mcp-tools-reference)). Every tool has a `title` and annotations: all are read-only except `export_openobserve_logs`, which writes a new folder under `ai-context/`. Agents can start with a prompt and follow its tool workflow. In-process, the mcp-server-logs reads its accounts from its own `config/` folder and environment variables, as in standalone mode.
 
 One child serves every OpenObserve environment: its OpenObserve tools take an optional `env` (`dev`, `stg`, `prod`) per call, so mount it once (e.g. `logs__get_openobserve_service_logs({ env: 'prod', … })`), not once per environment.
 

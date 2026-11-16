@@ -335,7 +335,7 @@ get_openobserve_service_logs    { "env": "prod", "organization": "…", "stream"
 ```
 
 - `env` picks `config/openobserve.<env>.env` for that call only. Without `env`, the default is used: `OPENOBSERVE_ENV` from the entry, else `OPENOBSERVE_URL` / `OPENOBSERVE_EMAIL` / `OPENOBSERVE_TOKEN` from the entry, else `config/openobserve.dev.env` if it has a URL, else no default (pass `env`).
-- Under mcp-hub, the hub can send the accounts instead: `CENTRAL_CONFIG_PATH` in the entry's `env` names a JSON file whose `openobserve` / `seq` sections win over the `config/*.env` files; an empty hub value falls back to the file (see `../mcp-hub/docs/mcps/mcp-server-logs.md`). `list_log_providers` and `--preflight` show where each account comes from: `env`, `hub`, `local` or `unset`.
+- Under mcp-hub, the hub can send the accounts instead: `CENTRAL_CONFIG_PATH` in the entry's `env` names a JSON file whose `openobserve` / `seq` sections win over the `config/*.env` files; an empty hub value falls back to the file (see `../mcp-hub/docs/mcps/mcp-server-logs.md`). `list_log_providers` and `--preflight` show where each account comes from: `env`, `hub`, `local` or `unset`. `config_status` (no input, no network call) gives the Hub the source of its required `log_account` group (the OpenObserve dev account, else Seq) as `{"groups": {"log_account": "local"}}`.
 - `read_ai_context` needs no `env`: it uses the environment written in the export.
 - An environment works once its file is filled in (step 5); no change to the client config is needed.
 - Seq: `SEQ_SERVER_URL` / `SEQ_API_KEY` in the entry's `env` win over `config/seq.env`. Prefer the file, so the key is not in the client config:

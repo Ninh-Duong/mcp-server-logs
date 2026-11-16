@@ -95,6 +95,10 @@ Then add tests with a fake server (see `src/tests/seq.test.ts`).
 - **Purpose**: Lists all known log backends, whether their credentials are configured, and endpoint URLs, plus `openobserve_environments` (which of dev/stg/prod have an account). The Seq provider and each environment carry `source`: `env` (client variables), `hub` (mcp-hub's file), `local` (`config/*.env`) or `unset`; `--preflight` shows the same.
 - **Parameters**: None.
 
+### Tool: `config_status`
+- **Purpose**: For mcp-hub: where each required setting group of `hub-requirements.json` comes from, as `{"groups": {"log_account": "<source>"}}` with source `env`, `hub`, `local` or `unset`. `log_account` is the OpenObserve dev account (url, email, token) when complete, else Seq (server URL and API key), else `unset`. Names only, never values or paths; no network call. A new required group in `hub-requirements.json` needs its `id` here too.
+- **Parameters**: None.
+
 ### Tool: `query_logs`
 - **Purpose**: Retrieves logs with filtering, time range bounding, and level filtering.
 - **Parameters**:

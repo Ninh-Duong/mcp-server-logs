@@ -1,9 +1,9 @@
-/** The investigation prompt and the provider-neutral tools: list_log_providers, query_logs. */
+/** The investigation prompt and the provider-neutral tools: list_log_providers, config_status, query_logs. */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { LogsService } from '../service.js';
-import { ConfigSource, OPENOBSERVE_ENVS, openObserveAccountFor, openObserveAccountSource, seqSource } from '../config.js';
-import { READ_REMOTE, env, json, level, runIn } from './common.js';
+import { ConfigSource, OPENOBSERVE_ENVS, logAccountSource, openObserveAccountFor, openObserveAccountSource, seqSource } from '../config.js';
+import { READ_LOCAL, READ_REMOTE, env, json, level, runIn } from './common.js';
 
 export function registerBugPrompt(server: McpServer, prefix: string): void {
   server.registerPrompt(`${prefix}investigate_api_bug`, {
@@ -52,6 +52,13 @@ export function registerQueryTools(server: McpServer, prefix: string, service: L
     const providers = service.listProviders().map((p) => (p.name === 'seq' ? { ...p, source: seqSource } : p));
     return json({ count: providers.length, providers, openobserve_environments: openObserveEnvironments() });
   });
+
+  server.registerTool(`${prefix}config_status`, {
+    title: 'Configuration status',
+    description: 'Where each required setting group comes from, for mcp-hub: {"groups": {"log_account": source}}, source being env (client variables), hub (mcp-hub config), local (config/*.env) or unset. log_account is the OpenObserve dev account, else Seq. Names only, no values; makes no network call.',
+    inputSchema: {},
+    annotations: { ...READ_LOCAL, idempotentHint: true },
+  }, async () => json({ groups: { log_account: logAccountSource() } }));
 
   server.registerTool(`${prefix}query_logs`, {
     title: 'Query logs',
